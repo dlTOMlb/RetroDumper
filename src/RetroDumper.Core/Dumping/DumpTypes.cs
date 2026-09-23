@@ -46,6 +46,20 @@ public sealed class DumpOptions
     public bool VerifyChecksum { get; set; } = true;
 
     /// <summary>
+    /// ファミコンのマッパー番号。null なら識別結果かデータベースに従う。
+    ///
+    /// ファミコンのカセットはマッパーを申告しないため、
+    /// データベースで同定できない場合は必ず指定が要る。
+    /// </summary>
+    public int? NesMapperOverride { get; set; }
+
+    /// <summary>ファミコンの PRG-ROM 容量（バイト）。</summary>
+    public long? NesPrgSize { get; set; }
+
+    /// <summary>ファミコンの CHR-ROM 容量（バイト）。0 なら CHR-RAM。</summary>
+    public long? NesChrSize { get; set; }
+
+    /// <summary>
     /// GBA スロットの ROM 先頭アドレス。
     /// 既定は GBA のシステムバス上のアドレス 0x08000000。
     /// opcode 探索でフラットな 0 番地起点だと判明した場合はそちらを設定する。
@@ -79,6 +93,20 @@ public sealed class CartridgeInfo
 
     /// <summary>識別時に検出した注意事項。空なら問題なし。</summary>
     public List<string> Warnings { get; } = new();
+
+    /// <summary>
+    /// 識別で確定したファミコンのマッパー番号。
+    ///
+    /// ファミコンだけは、吸い出しに必要な情報がカセットから読めない。
+    /// 識別でデータベースから引いた値を、吸い出しへ引き継ぐために持つ。
+    /// </summary>
+    public int? NesMapperNumber { get; init; }
+
+    /// <summary>識別で確定した PRG-ROM 容量（バイト）。</summary>
+    public long NesPrgSize { get; init; }
+
+    /// <summary>識別で確定した CHR-ROM 容量（バイト）。</summary>
+    public long NesChrSize { get; init; }
 }
 
 /// <summary>吸い出し結果。</summary>

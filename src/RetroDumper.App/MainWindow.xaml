@@ -81,6 +81,33 @@
                                 </StackPanel>
                             </GroupBox>
 
+                            <GroupBox Header="ファミコン詳細">
+                                <StackPanel>
+                                    <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,0,0,4"
+                                               Text="ファミコンのカセットはヘッダを持たず、マッパー番号も容量も申告しません。データベースで同定できない場合は手動で指定してください。" />
+                                    <Label Content="マッパー" />
+                                    <ComboBox x:Name="NesMapperCombo" />
+                                    <Grid Margin="0,4,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Label Grid.Column="0" Content="PRG-ROM (KB)" />
+                                        <TextBox Grid.Column="1" x:Name="NesPrgSizeBox" Width="80" Text="32" />
+                                    </Grid>
+                                    <Grid Margin="0,4,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Label Grid.Column="0" Content="CHR-ROM (KB)" />
+                                        <TextBox Grid.Column="1" x:Name="NesChrSizeBox" Width="80" Text="8" />
+                                    </Grid>
+                                    <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,4,0,0"
+                                               Text="CHR-ROM が 0 のカセット (UxROM など) は 0 を入れてください。" />
+                                </StackPanel>
+                            </GroupBox>
+
                             <GroupBox Header="サイズ">
                                 <StackPanel>
                                     <CheckBox x:Name="OverrideSizeCheck" Content="ROM サイズを手動指定"

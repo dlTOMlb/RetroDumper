@@ -7,6 +7,7 @@ using Microsoft.Win32;
 using RetroDumper.Core.Database;
 using RetroDumper.Core.Dumping;
 using RetroDumper.Core.Gba;
+using RetroDumper.Core.Nes;
 using RetroDumper.Core.Probe;
 using RetroDumper.Core.Snes;
 using RetroDumper.Core.Transport;
@@ -49,6 +50,13 @@ public partial class MainWindow : Window
         ("HiROM + SPC7110", SnesMapper.Spc7110),
     ];
 
+    /// <summary>ファミコンのマッパー候補。先頭は「自動（データベース）」。</summary>
+    private static readonly (string Label, int? Number)[] NesMapperChoices =
+    [
+        ("自動（データベース）", null),
+        .. NesMapper.All.Select(m => ($"{m.Number}: {m.Name}", (int?)m.Number)),
+    ];
+
     public MainWindow()
     {
         InitializeComponent();
@@ -62,6 +70,9 @@ public partial class MainWindow : Window
 
         SnesMapperCombo.ItemsSource = MapperChoices.Select(c => c.Label).ToList();
         SnesMapperCombo.SelectedIndex = 0;
+
+        NesMapperCombo.ItemsSource = NesMapperChoices.Select(c => c.Label).ToList();
+        NesMapperCombo.SelectedIndex = 0;
 
         _uiReady = true;
 
@@ -560,8 +571,15 @@ public partial class MainWindow : Window
             IncludeSaveRam = IncludeSaveCheck.IsChecked == true,
             VerifyChecksum = VerifyChecksumCheck.IsChecked == true,
             GbaRomBase = _gbaRomBase,
+            NesMapperOverride = NesMapperChoices[Math.Max(0, NesMapperCombo.SelectedIndex)].Number,
+            NesPrgSize = ParseKilobytes(NesPrgSizeBox.Text),
+            NesChrSize = ParseKilobytes(NesChrSizeBox.Text),
         };
     }
+
+    /// <summary>KB 表記の入力をバイト数に直す。空欄や不正なら null。</summary>
+    private static long? ParseKilobytes(string text)
+        => long.TryParse((text ?? "").Trim(), out long kb) && kb >= 0 ? kb * 1024 : null;
 
     private void OverrideSize_Changed(object sender, RoutedEventArgs e)
     {

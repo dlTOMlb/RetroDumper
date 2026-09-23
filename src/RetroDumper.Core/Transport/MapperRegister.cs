@@ -37,6 +37,12 @@ public static class MapperRegister
         // セガのマッパーレジスタ。$FFFC 制御 / $FFFD-$FFFF 各スロットのバンク。
         CartridgeKind.MarkIIIOrGameGear => address is >= 0xFFFC and <= 0xFFFF,
 
+        // ファミコンのマッパーレジスタは $8000-$FFFF。
+        // そこは PRG-ROM が見えている領域でもあるが、ROM は読み出し専用なので
+        // 書き込みはマッパーのラッチに入るだけで、ROM の内容は変わらない。
+        // $6000-$7FFF はバッテリーバックアップ WRAM（セーブ）なので**含めない**。
+        CartridgeKind.Famicom => address is >= 0x8000 and <= 0xFFFF,
+
         // GBA は読み出しに書き込みを必要としない。例外を作らない。
         CartridgeKind.GameBoyAdvance => false,
 
@@ -52,6 +58,10 @@ public static class MapperRegister
     public static bool IsSaveMemory(CartridgeKind kind, uint address) => kind switch
     {
         CartridgeKind.GameBoy => address is >= 0xA000 and <= 0xBFFF,
+
+        // ファミコンのバッテリーバックアップ WRAM。
+        CartridgeKind.Famicom => address is >= 0x6000 and <= 0x7FFF,
+
         _ => false,
     };
 }

@@ -1,6 +1,7 @@
 using RetroDumper.Core.Gb;
 using RetroDumper.Core.Gba;
 using RetroDumper.Core.Md;
+using RetroDumper.Core.Nes;
 using RetroDumper.Core.Snes;
 using RetroDumper.Core.Sms;
 using RetroDumper.Core.Transport;
@@ -14,6 +15,7 @@ public static class DumperRegistry
     [
         new SnesDumper(),
         new MdDumper(),
+        new NesDumper(),
         new SmsDumper(),
         new GbDumper(),
         new GbaDumper(),
