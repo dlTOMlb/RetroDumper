@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.Win32;
+using RetroDumper.Core.Database;
 using RetroDumper.Core.Dumping;
 using RetroDumper.Core.Gba;
 using RetroDumper.Core.Probe;
@@ -427,6 +428,8 @@ public partial class MainWindow : Window
             if (result.ChecksumOk is bool ok)
                 Log($"チェックサム検証: {(ok ? "一致" : "不一致")} — {result.ChecksumDetail}");
 
+            ReportNoIntroMatch(result.Rom, result.Crc32);
+
             ShowCartridgeInfo(result.Info);
 
             var elapsed = DateTime.Now - started;
@@ -473,6 +476,43 @@ public partial class MainWindow : Window
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => _cts?.Cancel();
+
+    /// <summary>
+    /// 吸い出した ROM を No-Intro の DAT と照合する。
+    ///
+    /// DAT は同梱していない。利用者が DataBase フォルダに置いたものを読む。
+    /// 無ければ何も言わずに黙っている（機能の必須要件ではない）。
+    ///
+    /// 一致すれば「正規のダンプと同一」と言い切れる。
+    /// 一致しないこと自体は失敗を意味しない（未収録・リビジョン違い・
+    /// 容量判定のずれなど理由はいろいろある）。
+    /// </summary>
+    private void ReportNoIntroMatch(byte[] rom, uint crc32)
+    {
+        var db = NoIntroDatabase.Load(log: null);
+
+        if (db.IsEmpty)
+        {
+            Log($"No-Intro DAT による照合は省略しました（{NoIntroDatabase.DefaultDirectory} に *.dat がありません）。");
+            return;
+        }
+
+        var match = db.Match(rom, rom.Length);
+
+        if (match is not null)
+        {
+            Log($"No-Intro 一致: {match.GameName}");
+            Log($"  {match.RomName} / {FormatBytes(match.Size)} / CRC32 {match.Crc32}");
+            return;
+        }
+
+        Log($"No-Intro 照合: 一致なし（CRC32 {crc32:X8} / {db.EntryCount} 件と比較）。");
+
+        // 同じ CRC32 が無くても、容量だけ合う候補を挙げると原因の見当がつく。
+        var sameCrc = db.FindByCrc(crc32);
+        if (sameCrc.Count > 0)
+            Log($"  CRC32 は一致しますが MD5/SHA-1 が違います: {sameCrc[0].GameName}");
+    }
 
     private DumpOptions? BuildOptions()
     {
