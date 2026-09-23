@@ -40,6 +40,23 @@ public static class NesWriteProbe
         journal.Write("入れ替われば書き込みは届いています。");
         journal.Write("");
 
+        // 読みに行く前に、何が挿さっているかを確かめる。
+        // ここを飛ばすと、スロットが起きていないだけの応答なしを
+        // 「書き込みが効かない」と読み違える。
+        var status = link.GetStatus();
+
+        journal.Write($"カートリッジ種別: {status.Kind.ToDisplayName()} (0x{(byte)status.Kind:X2})");
+
+        if (status.Kind != CartridgeKind.Famicom)
+        {
+            journal.Write("");
+            journal.Write("！！ ファミコンのカセットが挿さっていません。");
+            journal.Write("　　 挿し直して「種別再取得」を押してから、もう一度お試しください。");
+            return;
+        }
+
+        journal.Write("");
+
         uint at8000 = Crc(link, 0x8000);
         uint atA000 = Crc(link, 0xA000);
 
@@ -126,6 +143,22 @@ public static class NesWriteProbe
                 link.SendControl(RfcaOpcode.NesCpuWrite, address, size: 1, parameter: value));
     }
 
+    /// <summary>
+    /// 1 バンク読んで CRC32 を取る。1 度だけ読み直す。
+    ///
+    /// 最初の 1 回はスロットが起き切る前に当たることがある。
+    /// そこで諦めると、原因が書き込みなのか読み出しなのか分からなくなる。
+    /// </summary>
     private static uint Crc(IRfcaLink link, uint address)
-        => Checksums.Crc32(link.Read(RfcaOpcode.NesCpuRead, address, BankSize));
+    {
+        try
+        {
+            return Checksums.Crc32(link.Read(RfcaOpcode.NesCpuRead, address, BankSize));
+        }
+        catch (RfcaTimeoutException)
+        {
+            Thread.Sleep(300);
+            return Checksums.Crc32(link.Read(RfcaOpcode.NesCpuRead, address, BankSize));
+        }
+    }
 }

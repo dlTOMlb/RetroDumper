@@ -731,6 +731,8 @@ public partial class MainWindow : Window
 
         try
         {
+            _link.InvalidateWake();
+
             var link = _link;
             await Task.Run(() => NesWriteProbe.Run(link, journal));
 
