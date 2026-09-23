@@ -1,0 +1,752 @@
+using System.Collections.ObjectModel;
+using System.IO;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Media;
+using Microsoft.Win32;
+using RetroDumper.Core.Dumping;
+using RetroDumper.Core.Gba;
+using RetroDumper.Core.Probe;
+using RetroDumper.Core.Snes;
+using RetroDumper.Core.Transport;
+
+namespace RetroDumper.App;
+
+public partial class MainWindow : Window
+{
+    private RfcaLink? _link;
+    private CancellationTokenSource? _cts;
+    private CartridgeInfo? _info;
+    private ICartridgeDumper? _activeDumper;
+    private bool _writeWarningShown;
+
+    /// <summary>GBA の ROM 先頭アドレス。採取で判明したら設定する。</summary>
+    private uint? _gbaRomBase;
+
+    /// <summary>
+    /// XAML の解析が終わって全コントロールが揃ったか。
+    ///
+    /// CheckBox の IsChecked="True" は解析中に Checked を発火させるため、
+    /// XAML 上で後ろに書かれたコントロール（LogBox など）はまだ null。
+    /// イベントハンドラはこのフラグが立つまで何もしない。
+    /// </summary>
+    private bool _uiReady;
+
+    private readonly ObservableCollection<KeyValuePair<string, string>> _details = [];
+    private readonly ObservableCollection<string> _warnings = [];
+
+    /// <summary>マッパー上書きコンボの中身。null は「自動判定」。</summary>
+    private static readonly (string Label, SnesMapper? Value)[] MapperChoices =
+    [
+        ("自動判定", null),
+        ("LoROM", SnesMapper.LoRom),
+        ("HiROM", SnesMapper.HiRom),
+        ("ExHiROM", SnesMapper.ExHiRom),
+        ("LoROM + SA-1", SnesMapper.Sa1),
+        ("LoROM + S-DD1", SnesMapper.Sdd1),
+        ("HiROM + SPC7110", SnesMapper.Spc7110),
+    ];
+
+    public MainWindow()
+    {
+        InitializeComponent();
+
+        DetailsGrid.ItemsSource = _details;
+        WarningsList.ItemsSource = _warnings;
+
+        DumperCombo.ItemsSource = DumperRegistry.Selectable;
+        DumperCombo.SelectedIndex = 0;
+        DumperCombo.SelectionChanged += (_, _) => UpdateReadiness();
+
+        SnesMapperCombo.ItemsSource = MapperChoices.Select(c => c.Label).ToList();
+        SnesMapperCombo.SelectedIndex = 0;
+
+        _uiReady = true;
+
+        RefreshPorts();
+        Log("RetroDumper 起動。レトロフリーク カートリッジアダプタを USB で PC に接続してください。");
+        Log("アダプタ背面 2 ポートのうち、吸い出し機側（USB ハブでない方）を PC に挿します。");
+        Log("書き込み保護: 有効（書き込みコマンドを一切送りません）");
+    }
+
+    // ==================================================================
+    // 接続
+    // ==================================================================
+
+    private void RefreshPorts_Click(object sender, RoutedEventArgs e) => RefreshPorts();
+
+    private void RefreshPorts()
+    {
+        string? current = PortCombo.SelectedItem as string;
+        var ports = RfcaLink.EnumeratePorts().OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList();
+        PortCombo.ItemsSource = ports;
+
+        if (current is not null && ports.Contains(current))
+            PortCombo.SelectedItem = current;
+        else if (ports.Count > 0)
+            PortCombo.SelectedIndex = ports.Count - 1;
+
+        Log($"利用可能なシリアルポート: {(ports.Count == 0 ? "なし" : string.Join(", ", ports))}");
+    }
+
+    private async void AutoDetectPort_Click(object sender, RoutedEventArgs e)
+    {
+        if (_link is not null)
+        {
+            Log("先に切断してください。");
+            return;
+        }
+
+        SetBusy(true);
+        AutoDetectPortButton.IsEnabled = false;
+
+        try
+        {
+            Log("全 COM ポートに状態要求を投げて RFCA を探します…");
+
+            string? found = await Task.Run(() =>
+                RfcaLink.FindAdapterPort(line => Dispatcher.BeginInvoke(() => Log(line))));
+
+            RefreshPorts();
+
+            if (found is null)
+            {
+                Log("RFCA の応答を返すポートが見つかりませんでした。");
+                MessageBox.Show(this,
+                    "RFCA が応答するシリアルポートが見つかりませんでした。\n\n" +
+                    "・アダプタ背面 2 ポートのうち、吸い出し機側を PC に挿していますか\n" +
+                    "  （もう一方は USB ハブです）\n" +
+                    "・USB 延長ケーブルは通信対応のものですか\n" +
+                    "  （充電専用ケーブルでは通信できません）",
+                    "ポート自動検出", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            PortCombo.SelectedItem = found;
+            Log($"RFCA を {found} で検出しました。接続します。");
+            Connect_Click(sender, e);
+        }
+        finally
+        {
+            AutoDetectPortButton.IsEnabled = _link is null;
+            SetBusy(false);
+        }
+    }
+
+    private void Connect_Click(object sender, RoutedEventArgs e)
+    {
+        if (_link is not null)
+        {
+            Disconnect();
+            return;
+        }
+
+        if (PortCombo.SelectedItem is not string port)
+        {
+            MessageBox.Show(this, "COM ポートを選択してください。", "RetroDumper",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        try
+        {
+            _link = new RfcaLink(port)
+            {
+                Trace = message => Dispatcher.BeginInvoke(() =>
+                {
+                    if (VerboseTraceCheck.IsChecked == true) Log(message);
+                }),
+            };
+
+            ApplyWriteProtection();
+
+            Log($"{port} に接続しました ({RfcaLink.BaudRate} bps)。");
+            ConnectButton.Content = "切断";
+            SetConnectedState(true);
+            DetectCartridge();
+        }
+        catch (Exception ex)
+        {
+            _link = null;
+            Log($"接続に失敗しました: {ex.Message}");
+            MessageBox.Show(this, $"{port} を開けませんでした。\n\n{ex.Message}", "RetroDumper",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void Disconnect()
+    {
+        _cts?.Cancel();
+        _link?.Dispose();
+        _link = null;
+        _info = null;
+
+        ConnectButton.Content = "接続";
+        CartKindText.Text = "—";
+        CartKindText.Foreground = Brushes.Black;
+        SetConnectedState(false);
+        Log("切断しました。");
+    }
+
+    private void SetConnectedState(bool connected)
+    {
+        DetectButton.IsEnabled = connected;
+        IdentifyButton.IsEnabled = connected;
+        DiagnoseButton.IsEnabled = connected;
+        SlotComparisonButton.IsEnabled = connected;
+        GbaHeadSampleButton.IsEnabled = connected;
+        DumpButton.IsEnabled = connected && _info is not null;
+    }
+
+    // ==================================================================
+    // 書き込み保護
+    // ==================================================================
+
+    private void WriteProtect_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!_uiReady) return;
+
+        bool locked = WriteProtectCheck.IsChecked == true;
+
+        WriteProtectBadge.Background = locked
+            ? new SolidColorBrush(Color.FromRgb(0xDC, 0xFC, 0xE7))
+            : new SolidColorBrush(Color.FromRgb(0xFE, 0xE2, 0xE2));
+        WriteProtectBadge.BorderBrush = locked
+            ? new SolidColorBrush(Color.FromRgb(0x16, 0xA3, 0x4A))
+            : new SolidColorBrush(Color.FromRgb(0xEF, 0x44, 0x44));
+
+        if (!locked && !_writeWarningShown)
+        {
+            _writeWarningShown = true;
+            MessageBox.Show(this,
+                "書き込み保護を解除しました。\n\n" +
+                "これ以降、バンク切り替えでカートリッジへの書き込みが発生する可能性があります。\n\n" +
+                "ゲームボーイ・マークIII/ゲームギアの吸い出しには必要ですが、\n" +
+                "GBA・SFC・メガドライブの吸い出しには不要です。",
+                "書き込み保護の解除", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
+        ApplyWriteProtection();
+        Log(locked
+            ? "書き込み保護: 有効（書き込みコマンドを一切送りません）"
+            : "書き込み保護: 解除");
+    }
+
+    private void ApplyWriteProtection()
+    {
+        if (_link is not null)
+            _link.AllowWrites = WriteProtectCheck.IsChecked != true;
+    }
+
+    // ==================================================================
+    // 種別検出
+    // ==================================================================
+
+    private void Detect_Click(object sender, RoutedEventArgs e) => DetectCartridge();
+
+    private void DetectCartridge()
+    {
+        if (_link is null) return;
+
+        try
+        {
+            _link.InvalidateWake();
+            var status = _link.GetStatusWithRetry();
+
+            CartKindText.Text = status.Describe();
+            Log($"状態応答: {status} → {status.Describe()}");
+
+            if (!status.HasResponse)
+            {
+                CartKindText.Foreground = Brushes.Crimson;
+                Log("アダプタから応答がありません。次を確認してください:");
+                Log("  1. COM ポートが正しいか（「ポート自動検出」を試してください）");
+                Log("  2. アダプタ背面 2 ポートのうち、吸い出し機側を PC に挿しているか");
+                Log("  3. USB 延長ケーブルが通信対応か（充電専用では通信できません）");
+                return;
+            }
+
+            CartKindText.Foreground = status.Kind.IsConnected() ? Brushes.Green : Brushes.DarkOrange;
+
+            if (!status.Kind.IsConnected())
+            {
+                Log("アダプタは応答していますが、カセットを検出していません。");
+                Log("カセットの抜き差しと端子の清掃を試してください。");
+                return;
+            }
+
+            if (AutoSelectCheck.IsChecked == true)
+            {
+                var dumper = DumperRegistry.ForKind(status.Kind);
+
+                if (dumper is not null)
+                {
+                    DumperCombo.SelectedItem = dumper;
+                    Log($"機種を自動選択: {dumper.Name}");
+                }
+                else
+                {
+                    Log($"種別 0x{(byte)status.Kind:X2} に対応する実装がありません。手動で選んでください。");
+                }
+            }
+
+            UpdateReadiness();
+        }
+        catch (Exception ex)
+        {
+            Log($"種別取得に失敗しました: {ex.Message}");
+        }
+    }
+
+    private void AutoSelect_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!_uiReady) return;
+
+        DumperCombo.IsEnabled = AutoSelectCheck.IsChecked != true;
+        if (AutoSelectCheck.IsChecked == true) DetectCartridge();
+    }
+
+    private void UpdateReadiness()
+    {
+        if (DumperCombo?.SelectedItem is not ICartridgeDumper dumper)
+        {
+            if (ReadinessText is not null) ReadinessText.Text = "";
+            return;
+        }
+
+        ReadinessText.Text = dumper.ReadinessDetail;
+        ReadinessText.Visibility = string.IsNullOrEmpty(dumper.ReadinessDetail)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+    }
+
+    // ==================================================================
+    // 識別・吸い出し
+    // ==================================================================
+
+    private async void Identify_Click(object sender, RoutedEventArgs e)
+    {
+        if (_link is null) return;
+        if (DumperCombo.SelectedItem is not ICartridgeDumper dumper) return;
+        if (BuildOptions() is not DumpOptions options) return;
+
+        DetectCartridge();
+        if (DumperCombo.SelectedItem is ICartridgeDumper refreshed) dumper = refreshed;
+
+        SetBusy(true);
+
+        try
+        {
+            var link = _link;
+            var info = await Task.Run(() => dumper.Identify(link, options));
+
+            _info = info;
+            _activeDumper = dumper;
+
+            ShowCartridgeInfo(info);
+            DumpButton.IsEnabled = true;
+            Log($"識別完了: {info.Title} / {info.Mapper} / {FormatBytes(info.RomSize)}");
+        }
+        catch (Exception ex)
+        {
+            Log($"識別に失敗しました: {ex.Message}");
+            MessageBox.Show(this, ex.Message, "識別失敗", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private void ShowCartridgeInfo(CartridgeInfo info)
+    {
+        CartTitleText.Text = string.IsNullOrWhiteSpace(info.Title) ? "(タイトルなし)" : info.Title;
+
+        CartSummaryText.Text =
+            $"{info.Mapper}    ROM {FormatBytes(info.RomSize)}" +
+            (info.SaveSize > 0 ? $"    セーブ {FormatBytes(info.SaveSize)}" : "");
+
+        _details.Clear();
+        foreach (var detail in info.Details) _details.Add(detail);
+
+        _warnings.Clear();
+        foreach (string warning in info.Warnings) _warnings.Add(warning);
+    }
+
+    private async void Dump_Click(object sender, RoutedEventArgs e)
+    {
+        if (_link is null || _info is null || _activeDumper is null) return;
+        if (BuildOptions() is not DumpOptions options) return;
+
+        var save = new SaveFileDialog
+        {
+            Title = "ROM の保存先",
+            FileName = MakeFileName(_info),
+            Filter = $"ROM ファイル (*{_info.RomExtension})|*{_info.RomExtension}|すべてのファイル (*.*)|*.*",
+            AddExtension = true,
+            DefaultExt = _info.RomExtension,
+        };
+
+        if (save.ShowDialog(this) != true) return;
+
+        _cts = new CancellationTokenSource();
+        SetBusy(true);
+        CancelButton.IsEnabled = true;
+
+        var started = DateTime.Now;
+
+        var progress = new Progress<DumpProgress>(p =>
+        {
+            DumpProgressBar.Value = p.Ratio;
+            ProgressText.Text =
+                $"{p.Stage}  {FormatBytes(p.BytesDone)} / {FormatBytes(p.BytesTotal)}  ({p.Ratio:P1})";
+        });
+
+        try
+        {
+            Log($"吸い出し開始: {_info.Title} ({FormatBytes(_info.RomSize)})");
+
+            var link = _link;
+            var dumper = _activeDumper;
+            var info = _info;
+
+            var result = await Task.Run(() =>
+                dumper.Dump(link, info, options, progress, _cts.Token));
+
+            await File.WriteAllBytesAsync(save.FileName, result.Rom);
+            Log($"ROM を保存しました: {save.FileName} ({FormatBytes(result.Rom.LongLength)})");
+            Log($"CRC32: {result.Crc32:X8}");
+
+            if (result.Save is { Length: > 0 })
+            {
+                string savePath = Path.ChangeExtension(save.FileName, ".srm");
+                await File.WriteAllBytesAsync(savePath, result.Save);
+                Log($"セーブデータを保存しました: {savePath} ({FormatBytes(result.Save.LongLength)})");
+            }
+
+            if (result.ChecksumOk is bool ok)
+                Log($"チェックサム検証: {(ok ? "一致" : "不一致")} — {result.ChecksumDetail}");
+
+            ShowCartridgeInfo(result.Info);
+
+            var elapsed = DateTime.Now - started;
+            ProgressText.Text = $"完了 ({elapsed.TotalSeconds:0.0} 秒)";
+            Log($"完了。所要時間 {elapsed.TotalSeconds:0.0} 秒 / " +
+                $"平均 {result.Rom.LongLength / Math.Max(1.0, elapsed.TotalSeconds) / 1024.0:0.0} KB/s");
+
+            if (result.ChecksumOk == false)
+            {
+                MessageBox.Show(this,
+                    $"吸い出しは完了しましたが、チェックサムが一致しません。\n\n{result.ChecksumDetail}",
+                    "チェックサム不一致", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Log("吸い出しを中止しました。");
+            ProgressText.Text = "中止";
+        }
+        catch (RfcaWriteBlockedException)
+        {
+            Log("書き込み保護により吸い出しを中止しました。");
+            ProgressText.Text = "中止（書き込み保護）";
+            MessageBox.Show(this,
+                "この機種の吸い出しにはバンク切り替えのための書き込みが必要です。\n\n" +
+                "カートリッジには何も書き込まずに中止しました。\n" +
+                "続けるには上部の「カートリッジへの書き込みを禁止」を外してください。\n\n" +
+                "※ GBA・SFC・メガドライブの吸い出しに書き込みは不要です。",
+                "書き込み保護", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            Log($"吸い出しに失敗しました: {ex.Message}");
+            ProgressText.Text = "失敗";
+            MessageBox.Show(this, ex.Message, "吸い出し失敗", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _cts?.Dispose();
+            _cts = null;
+            CancelButton.IsEnabled = false;
+            SetBusy(false);
+        }
+    }
+
+    private void Cancel_Click(object sender, RoutedEventArgs e) => _cts?.Cancel();
+
+    private DumpOptions? BuildOptions()
+    {
+        if (!int.TryParse(ChunkSizeBox.Text.Trim(), out int chunk) || chunk <= 0)
+        {
+            MessageBox.Show(this, "転送サイズには正の整数を入れてください。", "設定",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return null;
+        }
+
+        if (!int.TryParse(RetryBox.Text.Trim(), out int retry) || retry < 0)
+        {
+            MessageBox.Show(this, "リトライ回数には 0 以上の整数を入れてください。", "設定",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return null;
+        }
+
+        long? romSizeOverride = null;
+
+        if (OverrideSizeCheck.IsChecked == true)
+        {
+            if (!double.TryParse(RomSizeBox.Text.Trim(), out double amount) || amount <= 0)
+            {
+                MessageBox.Show(this, "ROM サイズには正の数を入れてください。", "設定",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return null;
+            }
+
+            romSizeOverride = RomSizeUnitCombo.SelectedIndex switch
+            {
+                1 => (long)(amount * 1024),                 // KB
+                2 => (long)(amount * 1024 * 1024 / 8),      // Mbit
+                _ => (long)(amount * 1024 * 1024),          // MB
+            };
+        }
+
+        return new DumpOptions
+        {
+            ChunkSize = chunk,
+            RetryCount = retry,
+            RomSizeOverride = romSizeOverride,
+            SnesMapperOverride = MapperChoices[Math.Max(0, SnesMapperCombo.SelectedIndex)].Value,
+            ForceMmcInit = ForceMmcCheck.IsChecked == true,
+            IncludeSaveRam = IncludeSaveCheck.IsChecked == true,
+            VerifyChecksum = VerifyChecksumCheck.IsChecked == true,
+            GbaRomBase = _gbaRomBase,
+        };
+    }
+
+    private void OverrideSize_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!_uiReady) return;
+
+        bool on = OverrideSizeCheck.IsChecked == true;
+        RomSizeBox.IsEnabled = on;
+        RomSizeUnitCombo.IsEnabled = on;
+    }
+
+    // ==================================================================
+    // 診断
+    // ==================================================================
+
+    private async void Diagnose_Click(object sender, RoutedEventArgs e)
+    {
+        if (_link is null) return;
+
+        SetBusy(true);
+
+        try
+        {
+            Log("SFC 診断ダンプを開始します（読み出しのみ）…");
+
+            var link = _link;
+            string contents = await Task.Run(() =>
+                SnesDiagnostics.Run(link, line => Dispatcher.BeginInvoke(() => Log(line))));
+
+            string path = Path.Combine(
+                Path.GetDirectoryName(Environment.ProcessPath) ?? ".",
+                $"sfc-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
+
+            await File.WriteAllTextAsync(path, contents);
+            Log($"診断結果を保存しました: {path}");
+
+            MessageBox.Show(this, $"診断結果を保存しました。\n\n{path}",
+                "SFC 診断ダンプ", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            Log($"診断に失敗しました: {ex.Message}");
+            MessageBox.Show(this, ex.Message, "診断失敗", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    /// <summary>
+    /// 状態要求と判明済みリードを記録する。
+    /// カートリッジを差し替えながら繰り返し押して、1 つのファイルで見比べる。
+    /// </summary>
+    private async void SlotComparison_Click(object sender, RoutedEventArgs e)
+    {
+        if (_link is null) return;
+
+        string label = string.IsNullOrWhiteSpace(SlotLabelBox.Text)
+            ? "（名称未設定）"
+            : SlotLabelBox.Text.Trim();
+
+        SetBusy(true);
+
+        using var journal = ProbeJournal.AppendNextTo(
+            "slot-comparison",
+            line => Dispatcher.BeginInvoke(() => Log(line)));
+
+        try
+        {
+            _link.InvalidateWake();
+
+            var link = _link;
+            await Task.Run(() => SlotComparison.Run(link, label, journal));
+
+            Log($"「{label}」を記録しました: {journal.Path}");
+        }
+        catch (RfcaDisconnectedException ex)
+        {
+            journal.Write($"！！ {ex.Message}");
+            Log(ex.Message);
+            MessageBox.Show(this, ex.Message, "アダプタが切断されました",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            Disconnect();
+        }
+        catch (Exception ex)
+        {
+            journal.Write($"！！ {ex.GetType().Name}: {ex.Message}");
+            Log($"記録に失敗しました: {ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    /// <summary>
+    /// GBA スロットの先頭 4KB を採取し、任天堂ロゴの位置から
+    /// ROM 先頭がどのアドレスに対応するのかを確かめる。
+    /// </summary>
+    private async void GbaHeadSample_Click(object sender, RoutedEventArgs e)
+    {
+        if (_link is null) return;
+
+        _cts = new CancellationTokenSource();
+        SetBusy(true);
+        ProbeCancelButton.IsEnabled = true;
+
+        using var journal = ProbeJournal.CreateNextTo(
+            "gba-head",
+            line => Dispatcher.BeginInvoke(() => Log(line)));
+
+        try
+        {
+            Log($"GBA 先頭の採取を開始します。記録: {journal.Path}");
+            _link.InvalidateWake();
+
+            var link = _link;
+            var token = _cts.Token;
+            var result = await Task.Run(() => GbaHeadSampler.Run(link, journal, 0x1000, token));
+
+            string binPath = Path.ChangeExtension(journal.Path, ".bin");
+            await File.WriteAllBytesAsync(binPath, result.Data);
+
+            journal.Write($"採取した内容を保存しました: {binPath}");
+            Log($"採取データ: {binPath}");
+
+            if (result.LogoAt >= 0)
+            {
+                _gbaRomBase = result.RomBase;
+
+                AssignedText.Text =
+                    $"任天堂ロゴ 0x{result.LogoAt:X4} / ROM 先頭 0x{result.RomBase:X4}";
+
+                MessageBox.Show(this,
+                    "任天堂ロゴを検出しました。\n\n" +
+                    $"ロゴの位置 : 0x{result.LogoAt:X4}\n" +
+                    $"ROM 先頭   : アドレス 0x{result.RomBase:X4}\n\n{journal.Path}",
+                    "GBA 先頭の採取", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+            {
+                AssignedText.Text = "任天堂ロゴを検出できませんでした。";
+
+                MessageBox.Show(this,
+                    "任天堂ロゴが見つかりませんでした。\n\n" +
+                    "カートリッジを挿し直してから、もう一度試してください。\n\n" +
+                    journal.Path,
+                    "GBA 先頭の採取", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            journal.Write("（利用者が中止しました）");
+            Log("採取を中止しました。");
+        }
+        catch (RfcaDisconnectedException ex)
+        {
+            journal.Write($"！！ {ex.Message}");
+            Log(ex.Message);
+            MessageBox.Show(this, ex.Message, "アダプタが切断されました",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            Disconnect();
+        }
+        catch (Exception ex)
+        {
+            journal.Write($"！！ {ex.GetType().Name}: {ex.Message}");
+            Log($"採取に失敗しました: {ex.Message}");
+        }
+        finally
+        {
+            _cts?.Dispose();
+            _cts = null;
+            ProbeCancelButton.IsEnabled = false;
+            SetBusy(false);
+        }
+    }
+
+    // ==================================================================
+    // 共通
+    // ==================================================================
+
+    private void SetBusy(bool busy)
+    {
+        bool live = !busy && _link is not null;
+
+        IdentifyButton.IsEnabled = live;
+        DumpButton.IsEnabled = live && _info is not null;
+        ConnectButton.IsEnabled = !busy;
+        DetectButton.IsEnabled = live;
+        DiagnoseButton.IsEnabled = live;
+        SlotComparisonButton.IsEnabled = live;
+        GbaHeadSampleButton.IsEnabled = live;
+        AutoDetectPortButton.IsEnabled = !busy && _link is null;
+
+        Cursor = busy ? Cursors.Wait : null;
+    }
+
+    private static string MakeFileName(CartridgeInfo info)
+    {
+        string name = string.IsNullOrWhiteSpace(info.Title) ? "cartridge" : info.Title.Trim();
+
+        foreach (char invalid in Path.GetInvalidFileNameChars())
+            name = name.Replace(invalid, '_');
+
+        return name + info.RomExtension;
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:0.#} KB";
+        return $"{bytes / 1024.0 / 1024.0:0.##} MB";
+    }
+
+    private void Log(string message)
+    {
+        LogBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
+        LogBox.ScrollToEnd();
+    }
+
+    private void ClearLog_Click(object sender, RoutedEventArgs e) => LogBox.Clear();
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _cts?.Cancel();
+        _link?.Dispose();
+        base.OnClosed(e);
+    }
+}

@@ -1,0 +1,31 @@
+bin/
+obj/
+*.user
+.vs/
+
+dist/
+
+# 吸い出した ROM / セーブデータは絶対にコミットしない。
+# 市販ソフトの著作物であり、リポジトリに含めて配布してよいものではない。
+*.gba
+*.gb
+*.gbc
+*.sfc
+*.smc
+*.md
+*.gen
+*.nes
+*.pce
+*.sms
+*.gg
+*.srm
+*.sav
+*.bin
+
+# 実機診断の出力
+slot-comparison.txt
+slot-commands.txt
+dangerous-opcodes.txt
+sfc-diagnostics-*.txt
+gba-*.txt
+wake-param-*.txt

@@ -1,0 +1,221 @@
+<Window x:Class="RetroDumper.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="RetroDumper — レトロフリーク カートリッジアダプタ吸い出しツール"
+        Height="780" Width="1080" MinHeight="600" MinWidth="900"
+        FontFamily="Yu Gothic UI" FontSize="13">
+
+    <DockPanel Margin="10">
+
+        <!-- 接続バー -->
+        <Border DockPanel.Dock="Top" BorderBrush="#DDD" BorderThickness="0,0,0,1" Padding="0,0,0,8" Margin="0,0,0,8">
+            <StackPanel Orientation="Horizontal">
+                <Label Content="COM ポート" VerticalAlignment="Center" />
+                <ComboBox x:Name="PortCombo" Width="120" VerticalAlignment="Center" Margin="0,0,6,0" />
+                <Button x:Name="RefreshPortsButton" Content="更新" Click="RefreshPorts_Click" MinWidth="55" />
+                <Button x:Name="AutoDetectPortButton" Content="ポート自動検出" Click="AutoDetectPort_Click"
+                        MinWidth="110"
+                        ToolTip="全 COM ポートに状態要求を投げて、RFCA の応答を返すポートを探します。" />
+                <Button x:Name="ConnectButton" Content="接続" Click="Connect_Click" MinWidth="70" />
+                <Separator Margin="10,0" />
+                <Label Content="挿入中:" VerticalAlignment="Center" />
+                <TextBlock x:Name="CartKindText" Text="—" VerticalAlignment="Center"
+                           FontWeight="Bold" MinWidth="200" />
+                <Button x:Name="DetectButton" Content="種別再取得" Click="Detect_Click" IsEnabled="False" />
+                <Separator Margin="10,0" />
+                <Border x:Name="WriteProtectBadge" Background="#DCFCE7" BorderBrush="#16A34A"
+                        BorderThickness="1" CornerRadius="3" Padding="8,3" VerticalAlignment="Center">
+                    <CheckBox x:Name="WriteProtectCheck" IsChecked="True" Margin="0"
+                              Checked="WriteProtect_Changed" Unchecked="WriteProtect_Changed"
+                              Content="カートリッジへの書き込みを禁止"
+                              ToolTip="有効な間はシリアルポートに書き込みコマンドを一切送りません。ROM の吸い出しだけなら常に有効のままで構いません。" />
+                </Border>
+            </StackPanel>
+        </Border>
+
+        <!-- ログ -->
+        <Expander DockPanel.Dock="Bottom" Header="通信ログ" IsExpanded="True" Margin="0,8,0,0">
+            <DockPanel Height="150">
+                <StackPanel DockPanel.Dock="Right" Margin="6,0,0,0">
+                    <Button x:Name="ClearLogButton" Content="クリア" Click="ClearLog_Click" Margin="0,0,0,6" />
+                    <CheckBox x:Name="VerboseTraceCheck" Content="詳細トレース" />
+                </StackPanel>
+                <TextBox x:Name="LogBox" IsReadOnly="True" FontFamily="Consolas" FontSize="11"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                         TextWrapping="NoWrap" />
+            </DockPanel>
+        </Expander>
+
+        <TabControl>
+
+            <!-- ============ 吸い出しタブ ============ -->
+            <TabItem Header="吸い出し">
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="320" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- 設定 -->
+                    <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" Margin="0,0,10,0">
+                        <StackPanel>
+                            <GroupBox Header="機種">
+                                <StackPanel>
+                                    <CheckBox x:Name="AutoSelectCheck" Content="挿入中カセットから自動選択"
+                                              IsChecked="True" Checked="AutoSelect_Changed" Unchecked="AutoSelect_Changed" />
+                                    <ComboBox x:Name="DumperCombo" Margin="0,4,0,0"
+                                              DisplayMemberPath="Name" IsEnabled="False" />
+                                    <TextBlock x:Name="ReadinessText" TextWrapping="Wrap" Margin="0,6,0,0"
+                                               Foreground="#B45309" />
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Header="SFC 詳細">
+                                <StackPanel>
+                                    <Label Content="マッパー上書き" />
+                                    <ComboBox x:Name="SnesMapperCombo" />
+                                    <CheckBox x:Name="ForceMmcCheck"
+                                              Content="SA-1 / S-DD1 の MMC を明示初期化" />
+                                    <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,2,0,0"
+                                               Text="電源投入直後の既定値 (0,1,2,3) で 4MB までは読めます。読み出し結果が壊れている場合のみ有効化してください。" />
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Header="サイズ">
+                                <StackPanel>
+                                    <CheckBox x:Name="OverrideSizeCheck" Content="ROM サイズを手動指定"
+                                              Checked="OverrideSize_Changed" Unchecked="OverrideSize_Changed" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                        <TextBox x:Name="RomSizeBox" Width="90" Text="4" IsEnabled="False" />
+                                        <ComboBox x:Name="RomSizeUnitCombo" Width="70" Margin="6,0,0,0" IsEnabled="False">
+                                            <ComboBoxItem Content="MB" IsSelected="True" />
+                                            <ComboBoxItem Content="KB" />
+                                            <ComboBoxItem Content="Mbit" />
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,4,0,0"
+                                               Text="ヘッダが実容量より小さい値を申告するカセット（ウルトラコア等）で使います。" />
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Header="動作">
+                                <StackPanel>
+                                    <CheckBox x:Name="IncludeSaveCheck" Content="セーブ RAM も吸い出す（未検証）"
+                                              ToolTip="セーブ領域の配置は機種・マッパーごとに差が大きく、まだ実機検証ができていません。当面はオフのままを推奨します。" />
+                                    <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,2,0,0"
+                                               Text="当面オフ推奨。ROM 本体の吸い出しには影響しません。" />
+                                    <CheckBox x:Name="VerifyChecksumCheck" Content="チェックサムを検証する" IsChecked="True" />
+                                    <Grid Margin="0,6,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Label Grid.Column="0" Content="転送サイズ (バイト)" />
+                                        <TextBox Grid.Column="1" x:Name="ChunkSizeBox" Width="80" Text="1024" />
+                                    </Grid>
+                                    <Grid Margin="0,4,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Label Grid.Column="0" Content="リトライ回数" />
+                                        <TextBox Grid.Column="1" x:Name="RetryBox" Width="80" Text="3" />
+                                    </Grid>
+                                </StackPanel>
+                            </GroupBox>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- 情報と実行 -->
+                    <DockPanel Grid.Column="1">
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button x:Name="IdentifyButton" Content="カセットを識別" Click="Identify_Click"
+                                    IsEnabled="False" MinWidth="130" />
+                            <Button x:Name="DumpButton" Content="吸い出し開始" Click="Dump_Click"
+                                    IsEnabled="False" MinWidth="130" FontWeight="Bold" />
+                            <Button x:Name="CancelButton" Content="中止" Click="Cancel_Click" IsEnabled="False" />
+                            <Separator Margin="6,0" />
+                            <Button x:Name="DiagnoseButton" Content="SFC 診断ダンプ" Click="Diagnose_Click"
+                                    IsEnabled="False" MinWidth="120"
+                                    ToolTip="認識できないときの調査用。ヘッダ候補と主要バンクの生バイト列をログに出力し、テキストファイルにも保存します。読み出しのみで書き込みは行いません。" />
+                        </StackPanel>
+
+                        <Grid DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <ProgressBar Grid.Row="0" x:Name="DumpProgressBar" Height="22" Minimum="0" Maximum="1" />
+                            <TextBlock Grid.Row="1" x:Name="ProgressText" Margin="0,4,0,0" Text="待機中" />
+                        </Grid>
+
+                        <GroupBox Header="カートリッジ情報">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Top" x:Name="CartTitleText" FontSize="16"
+                                           FontWeight="Bold" Margin="0,0,0,4" Text="—" TextWrapping="Wrap" />
+                                <TextBlock DockPanel.Dock="Top" x:Name="CartSummaryText" Margin="0,0,0,8"
+                                           Foreground="#444" TextWrapping="Wrap" />
+                                <ItemsControl DockPanel.Dock="Bottom" x:Name="WarningsList" Margin="0,8,0,0">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="#FEF3C7" BorderBrush="#F59E0B" BorderThickness="1"
+                                                    Padding="6" Margin="0,0,0,4" CornerRadius="3">
+                                                <TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="#78350F" />
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <DataGrid x:Name="DetailsGrid" AutoGenerateColumns="False" IsReadOnly="True"
+                                          HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                          CanUserAddRows="False" RowHeaderWidth="0">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="項目" Binding="{Binding Key}" Width="200" />
+                                        <DataGridTextColumn Header="値" Binding="{Binding Value}" Width="*" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </DockPanel>
+                        </GroupBox>
+                    </DockPanel>
+                </Grid>
+            </TabItem>
+
+            <!-- ============ opcode 探索タブ ============ -->
+            <TabItem Header="診断">
+                <DockPanel Margin="8">
+
+                    <Border DockPanel.Dock="Top" Background="#ECFDF5" BorderBrush="#16A34A" BorderThickness="1"
+                            Padding="10" Margin="0,0,0,10" CornerRadius="3">
+                        <TextBlock TextWrapping="Wrap" Foreground="#14532D">
+                            <Run FontWeight="Bold" Text="opcode は全スロット分が確定済みです。探索は不要になりました。" />
+                            <LineBreak />
+                            ここにあるのは、接触不良や読み出し内容を確かめるための測定だけです。
+                            いずれも判明済みのコマンドしか送りません。
+                        </TextBlock>
+                    </Border>
+
+                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button x:Name="GbaHeadSampleButton" Content="GBA 先頭 4KB を採取" Click="GbaHeadSample_Click"
+                                    IsEnabled="False" MinWidth="160" FontWeight="Bold" Background="#CCF2CC"
+                                    ToolTip="アドレス 0 から 4KB を読み、任天堂ロゴの位置と ROM ヘッダの内容を確認します。" />
+                            <Button x:Name="SlotComparisonButton" Content="スロット比較を記録" Click="SlotComparison_Click"
+                                    IsEnabled="False" MinWidth="150" FontWeight="Bold" Background="#FFF3CD"
+                                    ToolTip="状態要求と判明済みリードを記録します。カートリッジを差し替えて何度も押し、slot-comparison.txt を見比べます。" />
+                            <TextBox x:Name="SlotLabelBox" Width="150" VerticalAlignment="Center" Margin="0,0,10,0"
+                                     Text="GBA 挿入"
+                                     ToolTip="今どういう状態で測っているかを書きます（例: スロット空 / GBA 挿入 / SFC 挿入）。" />
+                            <Button x:Name="ProbeCancelButton" Content="中止" Click="Cancel_Click" IsEnabled="False" />
+                        </StackPanel>
+                        <TextBlock Foreground="#666" TextWrapping="Wrap"
+                                   Text="読み出しが全バイト 0xFF になるときは、まずカートリッジを挿し直してください。アダプタは接触不良でも種別だけは正しく検出します。" />
+                    </StackPanel>
+
+                    <ProgressBar x:Name="ProbeProgressBar" DockPanel.Dock="Bottom" Height="18" Minimum="0" Maximum="255" />
+
+                    <TextBlock x:Name="AssignedText" TextWrapping="Wrap" Foreground="#15803D" VerticalAlignment="Top" />
+                </DockPanel>
+            </TabItem>
+
+        </TabControl>
+    </DockPanel>
+</Window>
