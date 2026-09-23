@@ -237,6 +237,15 @@ public static class GbaSave
         if (size == 0)
             throw new RfcaException("セーブ装置の種類が分かりません。");
 
+        if (IsEeprom(type))
+            throw new RfcaException(
+                "EEPROM への書き込みは行いません。" + Environment.NewLine +
+                "2026-09-24 の実機確認で、書き込んだ 512 バイトのうち 110 バイトが " +
+                "化けることが分かりました。届いてはいるものの内容が壊れるため、" +
+                "原因が分かるまで塞いでいます。" + Environment.NewLine +
+                "セーブの吸い出しは行えます。書き戻しが必要な場合は " +
+                "RetroFreakDumper をお使いください。");
+
         if (data.Length > size)
             throw new RfcaException(
                 $"セーブデータが大きすぎます。" +

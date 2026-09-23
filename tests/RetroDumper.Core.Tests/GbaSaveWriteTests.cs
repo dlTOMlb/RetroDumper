@@ -115,19 +115,6 @@ public sealed class GbaSaveWriteTests
     /// 読み戻しは 8KB のつもり、と噛み合わなくなり照合が必ず失敗する
     /// （2026-09-24 実機で発生）。中途半端に書く前に止めること。
     /// </summary>
-    [Fact]
-    public void EEPROMは途中までの書き込みを拒む()
-    {
-        var cart = new FakeGbaSaveCartridge(8192) { AllowSaveWrites = true };
-        var before = cart.Snapshot();
-
-        var error = Assert.Throws<RfcaException>(
-            () => GbaSave.Write(cart, GbaSaveType.Eeprom64k, Pattern(512)));
-
-        Assert.Contains("途中までの書き込みができません", error.Message);
-        Assert.Equal(before, cart.Snapshot());
-    }
-
     /// <summary>
     /// ファイルの大きさに合う EEPROM の型へ読み替えられること。
     /// 読み替えないまま書くと、書きと読み戻しでアドレス幅が食い違う。
@@ -145,6 +132,40 @@ public sealed class GbaSaveWriteTests
     public void EEPROM以外は読み替えない()
         => Assert.Equal(GbaSaveType.Sram, GbaSave.MatchEepromToSize(GbaSaveType.Sram, 512));
 
+    /// <summary>
+    /// **EEPROM への書き込みは行わない。**
+    ///
+    /// 2026-09-24 の実機確認で、512 バイトを書いたうち 110 バイトが
+    /// 化けた。書き込み自体は届いているが内容が壊れる。
+    /// 原因が分かるまで塞ぐ。吸い出しは行える。
+    ///
+    /// 直したと思ったら、まずこのテストを消す前に実機で確かめること。
+    /// </summary>
+    [Theory]
+    [InlineData(GbaSaveType.Eeprom4k, 512)]
+    [InlineData(GbaSaveType.Eeprom64k, 8192)]
+    public void EEPROMには書き込まない(GbaSaveType type, int size)
+    {
+        var cart = new FakeGbaSaveCartridge(size) { AllowSaveWrites = true };
+        var before = cart.Snapshot();
+
+        var error = Assert.Throws<RfcaException>(
+            () => GbaSave.Write(cart, type, Pattern(size)));
+
+        Assert.Contains("EEPROM への書き込みは行いません", error.Message);
+        Assert.Equal(before, cart.Snapshot());
+    }
+
+    /// <summary>塞いでいるのは書き込みだけ。吸い出しは行えること。</summary>
+    [Fact]
+    public void EEPROMも吸い出しは行える()
+    {
+        var cart = new FakeGbaSaveCartridge(512);
+        cart.Preset(Pattern(512));
+
+        Assert.Equal(Pattern(512), GbaSave.Read(cart, GbaSaveType.Eeprom4k));
+    }
+
     [Fact]
     public void 種類が分からなければ何もしない()
     {
@@ -152,18 +173,6 @@ public sealed class GbaSaveWriteTests
 
         Assert.Throws<RfcaException>(() => GbaSave.Read(cart, GbaSaveType.None));
         Assert.Throws<RfcaException>(() => GbaSave.Write(cart, GbaSaveType.None, []));
-    }
-
-    /// <summary>EEPROM は 512 バイトずつ書く。分割しても内容は変わらないこと。</summary>
-    [Fact]
-    public void EEPROMは分割して書いても内容が変わらない()
-    {
-        var cart = new FakeGbaSaveCartridge(8192) { AllowSaveWrites = true };
-        var data = Pattern(8192);
-
-        GbaSave.Write(cart, GbaSaveType.Eeprom64k, data);
-
-        Assert.Equal(data, cart.Snapshot());
     }
 
     /// <summary>フラッシュは 4KB ずつ書く。</summary>
