@@ -82,8 +82,16 @@ public sealed class NesDumper : ICartridgeDumper
             : db.IsEmpty
                 ? "データベースがありません"
                 : "データベースに一致なし";
-        info.Details["PRG-ROM"] = prgSize > 0 ? $"{prgSize / 1024} KB" : "未指定";
-        info.Details["CHR-ROM"] = chrSize > 0 ? $"{chrSize / 1024} KB" : "なし（CHR-RAM）";
+        info.Details["PRG-ROM"] = prgSize > 0 ? $"{prgSize / 1024} KB" : "吸い出し時に実測";
+        info.Details["CHR-ROM"] = chrSize > 0 ? $"{chrSize / 1024} KB" : "吸い出し時に実測";
+
+        if (mapper is not null)
+        {
+            info.Details["PRG 有効範囲"] = Range(mapper.PrgSizeRange);
+            info.Details["CHR 有効範囲"] = mapper.ChrSizeRange.Max == 0
+                ? "なし（CHR-RAM のみ）"
+                : Range(mapper.ChrSizeRange);
+        }
 
         if (mapperNo < 0)
             info.Warnings.Add(
@@ -99,6 +107,9 @@ public sealed class NesDumper : ICartridgeDumper
 
         return info;
     }
+
+    private static string Range((long Min, long Max) r)
+        => r.Min == r.Max ? $"{r.Min / 1024} KB" : $"{r.Min / 1024} 〜 {r.Max / 1024} KB";
 
     public DumpResult Dump(
         IRfcaLink link,
@@ -174,30 +185,42 @@ public sealed class NesDumper : ICartridgeDumper
     private static long DetectSize(NesBus bus, NesMapper mapper, bool isPrg)
     {
         int bankSize = isPrg ? mapper.PrgBankSize : mapper.ChrBankSize;
-        if (bankSize <= 0) return 0;
+        var (min, max) = isPrg ? mapper.PrgSizeRange : mapper.ChrSizeRange;
+
+        if (bankSize <= 0 || max <= 0) return 0;
+
+        // 取りうる容量が 1 つしかないなら測る必要がない。
+        if (min == max) return min;
 
         const int probe = 256;                 // 比較に使う先頭バイト数
 
-        // マッパーがアドレスできる範囲までしか探さない。
-        // NROM のようにバンク切り替えを持たないものは 2 バンクが上限で、
-        // それを超えて探すと折り返しが見つからず容量を誤る。
-        int maxBanks = isPrg ? mapper.MaxPrgBanks : mapper.MaxChrBanks;
+        int maxBanks = (int)(max / bankSize);
         if (maxBanks <= 0) return 0;
 
         byte[]? first = ReadProbe(bus, mapper, 0, bankSize, probe, isPrg);
-        if (first is null) return 0;
+        if (first is null) return Math.Max(min, 0);
 
         for (int banks = 1; banks <= maxBanks; banks <<= 1)
         {
             byte[]? at = ReadProbe(bus, mapper, banks, bankSize, probe, isPrg);
-            if (at is null) return (long)banks * bankSize;
 
-            // 折り返してバンク 0 と同じ内容が見えたら、そこが終端。
-            if (at.AsSpan().SequenceEqual(first)) return (long)banks * bankSize;
+            // 読めない、または折り返してバンク 0 と同じ内容が見えたら、そこが終端。
+            if (at is null || at.AsSpan().SequenceEqual(first))
+                return Clamp((long)banks * bankSize, min, max);
         }
 
-        return (long)maxBanks * bankSize;
+        return Clamp((long)maxBanks * bankSize, min, max);
     }
+
+    /// <summary>
+    /// 実測値をマッパーが取りうる範囲に収める。
+    ///
+    /// 範囲は sanni/cartreader の mapsize テーブルに合わせてある。
+    /// 折り返しの検出は ROM の内容次第で外すことがあるので、
+    /// あり得ない値をそのまま採用しないための歯止め。
+    /// </summary>
+    private static long Clamp(long value, long min, long max)
+        => value < min ? min : value > max ? max : value;
 
     private static byte[]? ReadProbe(
         NesBus bus, NesMapper mapper, int bank, int bankSize, int probe, bool isPrg)

@@ -286,3 +286,61 @@ public sealed class NesDumpTests
         Assert.Contains(info.Warnings, w => w.Contains("マッパー"));
     }
 }
+
+/// <summary>
+/// マッパーごとの容量範囲。
+///
+/// 値は sanni/cartreader の mapsize テーブル（Cart_Reader/NES.ino）に合わせてある。
+/// 同ツールもマッパーは利用者が選ぶ方式で、容量はこの範囲から選ばせている。
+/// 範囲を間違えると、実測の折り返し検出があり得ない値を返したときに
+/// そのまま採用してしまう。
+/// </summary>
+public sealed class NesMapperSizeRangeTests
+{
+    [Theory]
+    [InlineData(0, 16, 32)]      // NROM
+    [InlineData(1, 32, 512)]     // MMC1
+    [InlineData(2, 64, 256)]     // UxROM
+    [InlineData(3, 16, 32)]      // CNROM
+    [InlineData(4, 32, 512)]     // MMC3
+    public void PRGの範囲がcartreaderの表と一致する(int mapper, int minKb, int maxKb)
+    {
+        var (min, max) = NesMapper.ForNumber(mapper)!.PrgSizeRange;
+
+        Assert.Equal(minKb * 1024L, min);
+        Assert.Equal(maxKb * 1024L, max);
+    }
+
+    [Theory]
+    [InlineData(0, 0, 8)]        // NROM   CHR-RAM 構成もある
+    [InlineData(1, 0, 128)]      // MMC1
+    [InlineData(2, 0, 0)]        // UxROM  必ず CHR-RAM
+    [InlineData(3, 0, 2048)]     // CNROM
+    [InlineData(4, 0, 256)]      // MMC3
+    public void CHRの範囲がcartreaderの表と一致する(int mapper, int minKb, int maxKb)
+    {
+        var (min, max) = NesMapper.ForNumber(mapper)!.ChrSizeRange;
+
+        Assert.Equal(minKb * 1024L, min);
+        Assert.Equal(maxKb * 1024L, max);
+    }
+
+    /// <summary>UxROM は CHR-ROM を持たないので、吸い出そうとしないこと。</summary>
+    [Fact]
+    public void UxROMはCHRを吸い出さない()
+    {
+        var m = NesMapper.ForNumber(2)!;
+
+        Assert.Equal(0, m.ChrBankSize);
+        Assert.Equal(0, m.MaxChrBanks);
+        Assert.Equal(0L, m.ChrSizeRange.Max);
+    }
+
+    /// <summary>バンク数の上限は範囲から導かれること。</summary>
+    [Theory]
+    [InlineData(0, 2)]           // NROM  32KB / 16KB
+    [InlineData(2, 16)]          // UxROM 256KB / 16KB
+    [InlineData(4, 64)]          // MMC3  512KB / 8KB
+    public void PRGバンク数の上限(int mapper, int expected)
+        => Assert.Equal(expected, NesMapper.ForNumber(mapper)!.MaxPrgBanks);
+}

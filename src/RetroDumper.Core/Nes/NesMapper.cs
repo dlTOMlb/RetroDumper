@@ -25,17 +25,27 @@ public abstract class NesMapper
     public virtual int ChrBankSize => 0x2000;
 
     /// <summary>
-    /// このマッパーがアドレスできる PRG バンク数の上限。
+    /// このマッパーが取りうる PRG-ROM 容量の範囲（バイト）。
     ///
-    /// 容量の実測はバンクの折り返しを見るが、上限を超えた番号を指定しても
-    /// 意味のある値は返らない。マッパーごとに探索範囲を区切る必要がある。
+    /// 容量はバンクの折り返しで実測するが、上限を超えた番号を指定しても
+    /// 意味のある値は返らないため、マッパーごとに探索範囲を区切る必要がある。
     /// NROM のようにバンク切り替えを持たないものは特に重要で、
-    /// 上限を設けないと折り返しが見つからず容量を誤る。
+    /// 範囲を設けないと折り返しが見つからず容量を誤る。
+    ///
+    /// 値は sanni/cartreader の mapsize テーブル（Cart_Reader/NES.ino）に合わせた。
+    /// 同ツールも利用者がマッパーを選ぶ方式で、この範囲内から容量を選ばせている。
     /// </summary>
-    public virtual int MaxPrgBanks => 256;
+    public virtual (long Min, long Max) PrgSizeRange => (16 * 1024, 512 * 1024);
 
-    /// <summary>アドレスできる CHR バンク数の上限。</summary>
-    public virtual int MaxChrBanks => 256;
+    /// <summary>
+    /// 取りうる CHR-ROM 容量の範囲（バイト）。
+    /// Min が 0 なら CHR-ROM を持たない構成（CHR-RAM）があり得る。
+    /// </summary>
+    public virtual (long Min, long Max) ChrSizeRange => (0, 256 * 1024);
+
+    public int MaxPrgBanks => PrgBankSize <= 0 ? 0 : (int)(PrgSizeRange.Max / PrgBankSize);
+
+    public int MaxChrBanks => ChrBankSize <= 0 ? 0 : (int)(ChrSizeRange.Max / ChrBankSize);
 
     /// <summary>吸い出しの前に 1 度だけ行う初期化。</summary>
     public virtual void Initialize(NesBus bus) { }
@@ -65,9 +75,9 @@ public sealed class NromMapper : NesMapper
     public override int Number => 0;
     public override string Name => "NROM";
 
-    // バンク切り替えを持たない。PRG は最大 32KB（16KB × 2）、CHR は 8KB 固定。
-    public override int MaxPrgBanks => 2;
-    public override int MaxChrBanks => 1;
+    // バンク切り替えを持たない。CHR-RAM 構成（CHR-ROM なし）もある。
+    public override (long, long) PrgSizeRange => (16 * 1024, 32 * 1024);
+    public override (long, long) ChrSizeRange => (0, 8 * 1024);
 
     public override byte[] ReadPrgBank(NesBus bus, int bank, int size, int totalBanks)
         => bus.CpuRead(bank >= 1 ? 0xC000u : 0x8000u, size);
@@ -88,8 +98,8 @@ public sealed class Mmc1Mapper : NesMapper
     public override string Name => "MMC1";
     public override int ChrBankSize => 0x1000;
 
-    public override int MaxPrgBanks => 32;    // 16KB × 32 = 512KB
-    public override int MaxChrBanks => 32;    //  4KB × 32 = 128KB
+    public override (long, long) PrgSizeRange => (32 * 1024, 512 * 1024);
+    public override (long, long) ChrSizeRange => (0, 128 * 1024);
 
     private static void Reset(NesBus bus)
         => bus.CpuWrite(0x8000, 0x80);
@@ -139,8 +149,8 @@ public sealed class UxRomMapper : NesMapper
     public override string Name => "UxROM";
     public override int ChrBankSize => 0;
 
-    public override int MaxPrgBanks => 16;    // 16KB × 16 = 256KB
-    public override int MaxChrBanks => 0;
+    public override (long, long) PrgSizeRange => (64 * 1024, 256 * 1024);
+    public override (long, long) ChrSizeRange => (0, 0);    // 必ず CHR-RAM
 
     public override byte[] ReadPrgBank(NesBus bus, int bank, int size, int totalBanks)
     {
@@ -161,8 +171,8 @@ public sealed class CnRomMapper : NesMapper
     public override int Number => 3;
     public override string Name => "CNROM";
 
-    public override int MaxPrgBanks => 2;     // PRG は固定 32KB
-    public override int MaxChrBanks => 4;     //  8KB × 4 = 32KB
+    public override (long, long) PrgSizeRange => (16 * 1024, 32 * 1024);
+    public override (long, long) ChrSizeRange => (0, 2048 * 1024);
 
     public override byte[] ReadPrgBank(NesBus bus, int bank, int size, int totalBanks)
         => bus.CpuRead(bank >= 1 ? 0xC000u : 0x8000u, size);
@@ -186,8 +196,8 @@ public sealed class Mmc3Mapper : NesMapper
     public override int PrgBankSize => 0x2000;
     public override int ChrBankSize => 0x0400;
 
-    public override int MaxPrgBanks => 64;    // 8KB × 64 = 512KB
-    public override int MaxChrBanks => 256;   // 1KB × 256 = 256KB
+    public override (long, long) PrgSizeRange => (32 * 1024, 512 * 1024);
+    public override (long, long) ChrSizeRange => (0, 256 * 1024);
 
     public override byte[] ReadPrgBank(NesBus bus, int bank, int size, int totalBanks)
     {
