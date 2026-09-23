@@ -10,6 +10,7 @@ using RetroDumper.Core.Gba;
 using RetroDumper.Core.Probe;
 using RetroDumper.Core.Snes;
 using RetroDumper.Core.Transport;
+using RetroDumper.Core.Util;
 
 namespace RetroDumper.App;
 
@@ -759,14 +760,7 @@ public partial class MainWindow : Window
     }
 
     private static string MakeFileName(CartridgeInfo info)
-    {
-        string name = string.IsNullOrWhiteSpace(info.Title) ? "cartridge" : info.Title.Trim();
-
-        foreach (char invalid in Path.GetInvalidFileNameChars())
-            name = name.Replace(invalid, '_');
-
-        return name + info.RomExtension;
-    }
+        => FileNaming.MakeRomFileName(info.Title, info.RomExtension);
 
     private static string FormatBytes(long bytes)
     {
