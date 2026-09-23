@@ -163,25 +163,25 @@ public sealed class GbDumper : ICartridgeDumper
         {
             // MBC5: $2000 に下位 8bit、$3000 に bit8。
             case >= 0x19 and <= 0x1E:
-                link.WriteByte(write, 0x2000, (byte)(bank & 0xFF));
-                link.WriteByte(write, 0x3000, (byte)((bank >> 8) & 0x01));
+                link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x2000, (byte)(bank & 0xFF));
+                link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x3000, (byte)((bank >> 8) & 0x01));
                 break;
 
             // MBC2: $2000-$3FFF、ただしアドレス bit8 が 1 のときだけバンク選択。
             case 0x05 or 0x06:
-                link.WriteByte(write, 0x2100, (byte)(bank & 0x0F));
+                link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x2100, (byte)(bank & 0x0F));
                 break;
 
             // MBC3: $2000 に 7bit まとめて。
             case >= 0x0F and <= 0x13:
-                link.WriteByte(write, 0x2000, (byte)(bank & 0x7F));
+                link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x2000, (byte)(bank & 0x7F));
                 break;
 
             // MBC1: $2000 に下位 5bit、$4000 に上位 2bit（モード 0 のとき）。
             default:
-                link.WriteByte(write, 0x6000, 0x00);
-                link.WriteByte(write, 0x4000, (byte)((bank >> 5) & 0x03));
-                link.WriteByte(write, 0x2000, (byte)(bank & 0x1F));
+                link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x6000, 0x00);
+                link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x4000, (byte)((bank >> 5) & 0x03));
+                link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x2000, (byte)(bank & 0x1F));
                 break;
         }
     }
@@ -198,7 +198,7 @@ public sealed class GbDumper : ICartridgeDumper
         uint write = RfcaOpcode.GameBoyWrite;
 
         // 外部 RAM を有効化する。
-        link.WriteByte(write, 0x0000, 0x0A);
+        link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x0000, 0x0A);
 
         try
         {
@@ -210,7 +210,7 @@ public sealed class GbDumper : ICartridgeDumper
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                link.WriteByte(write, 0x4000, (byte)bank);
+                link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x4000, (byte)bank);
 
                 int length = (int)Math.Min(SaveBankSize, saveSize - done);
                 long captured = done;
@@ -231,7 +231,7 @@ public sealed class GbDumper : ICartridgeDumper
         finally
         {
             // 外部 RAM を無効化して戻す。書き込み事故を避ける。
-            link.WriteByte(write, 0x0000, 0x00);
+            link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x0000, 0x00);
         }
     }
 

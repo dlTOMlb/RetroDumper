@@ -186,4 +186,23 @@ public sealed class FakeLinearCartridge : IRfcaLink
 
         Writes.Add((0, 0, new byte[size]));
     }
+
+    /// <summary>
+    /// バンク切り替えレジスタへの書き込み。
+    /// 実機と同じく、範囲外なら書き込み保護で弾く。
+    /// </summary>
+    public void WriteBankRegister(CartridgeKind kind, uint opcode, uint address, byte value)
+    {
+        if (MapperRegister.IsSaveMemory(kind, address))
+            throw new RfcaWriteBlockedException($"0x{address:X4} はセーブ領域です");
+
+        if (!MapperRegister.IsBankRegister(kind, address))
+            throw new RfcaWriteBlockedException($"0x{address:X4} はバンクレジスタではありません");
+
+        BankRegisterWrites.Add((kind, address, value));
+
+    }
+
+    /// <summary>検証用: バンク切り替えレジスタへの書き込み。</summary>
+    public List<(CartridgeKind Kind, uint Address, byte Value)> BankRegisterWrites { get; } = [];
 }

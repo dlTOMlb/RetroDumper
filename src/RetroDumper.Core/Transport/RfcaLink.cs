@@ -52,6 +52,17 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     public bool AllowWrites { get; set; }
 
     /// <summary>
+    /// バンク切り替えレジスタへの書き込みを許可するか。**既定は true**。
+    ///
+    /// <see cref="AllowWrites"/>（内容の書き換え）とは別物。
+    /// MBC やマッパーのレジスタは揮発性で、カセットの内容は変わらない。
+    /// バンクを選べないと 32KB より大きいゲームボーイのカセットは読めない。
+    ///
+    /// 対象範囲は <see cref="MapperRegister"/> が決めており、GBA は含まれない。
+    /// </summary>
+    public bool AllowBankSwitching { get; set; } = true;
+
+    /// <summary>
     /// リード要求の肯定応答を待つ時間。
     ///
     /// opcode 総当たりでは未実装の番号が大量に空振りするので、
@@ -709,6 +720,42 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// 指定 opcode のバスの <paramref name="address"/> へ書き込む。
     /// マッパー（SA-1 Super MMC、GB の MBC、SMS のバンクレジスタ）の制御に使う。
     /// </summary>
+    /// <summary>
+    /// バンク切り替えレジスタへ 1 バイト書く。**書き込み保護下でも通る。**
+    ///
+    /// 対象は <see cref="MapperRegister.IsBankRegister"/> が認める範囲だけ。
+    /// ゲームボーイの MBC とマークIII のマッパーが該当する。
+    /// これらは揮発性のレジスタで、カセットの内容は変わらない。
+    /// バンクを選べなければ 32KB より大きいカセットを読めないため、
+    /// 内容保護とは別の扱いにしている。
+    ///
+    /// GBA は対象外。<see cref="MapperRegister.IsBankRegister"/> が
+    /// 常に false を返すので、この経路から GBA へ書き込むことはできない。
+    /// </summary>
+    /// <exception cref="RfcaWriteBlockedException">
+    /// 範囲外のアドレス、または <see cref="AllowBankSwitching"/> が false のとき。
+    /// </exception>
+    public void WriteBankRegister(CartridgeKind kind, uint opcode, uint address, byte value)
+    {
+        if (MapperRegister.IsSaveMemory(kind, address))
+            throw new RfcaWriteBlockedException(
+                $"アドレス 0x{address:X4} はセーブデータの領域です。" +
+                "バンク切り替えとして書き込むことはできません。");
+
+        if (!MapperRegister.IsBankRegister(kind, address))
+            throw new RfcaWriteBlockedException(
+                $"{kind.ToDisplayName()} のアドレス 0x{address:X4} は " +
+                "バンク切り替えレジスタではありません。書き込みを中止しました。");
+
+        if (!AllowBankSwitching)
+            throw new RfcaWriteBlockedException(
+                "バンク切り替えが禁止されています。" +
+                $"アドレス 0x{address:X4} への書き込みを中止しました。");
+
+        Trace?.Invoke($"バンク切り替え: 0x{address:X4} <- 0x{value:X2} ({kind.ToDisplayName()})");
+        WriteCore(opcode, address, stackalloc byte[] { value });
+    }
+
     public void Write(uint opcode, uint address, ReadOnlySpan<byte> data)
     {
         if (data.Length == 0) return;
@@ -720,6 +767,16 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
                 $"書き込み保護が有効です。opcode 0x{opcode:X2} アドレス 0x{address:X8} への " +
                 $"{data.Length} バイトの書き込みを実行せずに中止しました。");
 
+        WriteCore(opcode, address, data);
+    }
+
+    /// <summary>
+    /// 実際にバスへ書く。**保護の判定はここでは行わない。**
+    /// 呼び出す前に <see cref="AllowWrites"/> か
+    /// <see cref="WriteBankRegister"/> の範囲判定を必ず通すこと。
+    /// </summary>
+    private void WriteCore(uint opcode, uint address, ReadOnlySpan<byte> data)
+    {
         EnsureAwake();
 
         lock (_gate)

@@ -36,6 +36,13 @@ public interface IRfcaLink
                        uint headerField = 0x08);
 
     /// <summary>
+    /// バンク切り替えレジスタへ 1 バイト書く。書き込み保護下でも通る。
+    /// 対象は <see cref="MapperRegister.IsBankRegister"/> が認める範囲だけで、
+    /// GBA は含まれない。
+    /// </summary>
+    void WriteBankRegister(CartridgeKind kind, uint opcode, uint address, byte value);
+
+    /// <summary>
     /// 指定 opcode のバスから読み出す。
     ///
     /// <paramref name="headerField"/> はリクエストの 2 つ目のフィールド。

@@ -140,15 +140,15 @@ public sealed class SmsDumper : ICartridgeDumper
     /// <summary>フレーム 2 ($8000-$BFFF) に指定バンクを貼る。</summary>
     private static void SelectFrame2Bank(IRfcaLink link, int bank)
     {
-        link.WriteByte(RfcaOpcode.SmsWrite, RegControl, 0x80);
-        link.WriteByte(RfcaOpcode.SmsWrite, RegFrame2, (byte)bank);
+        link.WriteBankRegister(CartridgeKind.MarkIIIOrGameGear, RfcaOpcode.SmsWrite, RegControl, 0x80);
+        link.WriteBankRegister(CartridgeKind.MarkIIIOrGameGear, RfcaOpcode.SmsWrite, RegFrame2, (byte)bank);
     }
 
     /// <summary>フレーム 1 ($4000-$7FFF) に指定バンクを貼る。</summary>
     public static void SelectFrame1Bank(IRfcaLink link, int bank)
     {
-        link.WriteByte(RfcaOpcode.SmsWrite, RegControl, 0x80);
-        link.WriteByte(RfcaOpcode.SmsWrite, RegFrame1, (byte)bank);
+        link.WriteBankRegister(CartridgeKind.MarkIIIOrGameGear, RfcaOpcode.SmsWrite, RegControl, 0x80);
+        link.WriteBankRegister(CartridgeKind.MarkIIIOrGameGear, RfcaOpcode.SmsWrite, RegFrame1, (byte)bank);
     }
 
     private sealed class BankProgress(IProgress<DumpProgress>? inner, long baseOffset, long total)

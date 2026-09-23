@@ -28,7 +28,7 @@
                     <CheckBox x:Name="WriteProtectCheck" IsChecked="True" Margin="0"
                               Checked="WriteProtect_Changed" Unchecked="WriteProtect_Changed"
                               Content="カートリッジへの書き込みを禁止"
-                              ToolTip="有効な間はシリアルポートに書き込みコマンドを一切送りません。ROM の吸い出しだけなら常に有効のままで構いません。" />
+                              ToolTip="カートリッジの内容（セーブデータ・フラッシュ）を書き換えるコマンドを送りません。ゲームボーイやマークIII のバンク切り替えは揮発性のレジスタ操作なので、有効のままでも吸い出せます。ROM の吸い出しなら常に有効のままで構いません。" />
                 </Border>
             </StackPanel>
         </Border>

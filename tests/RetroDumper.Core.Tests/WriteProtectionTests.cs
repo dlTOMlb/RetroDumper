@@ -206,6 +206,9 @@ public class WriteProtectionTests
         public void WriteByte(uint opcode, uint address, byte value)
             => Write(opcode, address, stackalloc byte[] { value });
 
+        public void WriteBankRegister(CartridgeKind kind, uint opcode, uint address, byte value)
+            => throw new RfcaWriteBlockedException("このシミュレータはバンク切り替えを扱いません");
+
         public byte[] SendControl(uint opcode, uint address = 0, uint size = 0, uint parameter = 0, uint headerField = 0x08)
             => new byte[8];
 
