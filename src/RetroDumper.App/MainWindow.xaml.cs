@@ -61,6 +61,9 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
+        if (AppVersion is { Length: > 0 } version)
+            Title = $"{Title}  {version}";
+
         DetailsGrid.ItemsSource = _details;
         WarningsList.ItemsSource = _warnings;
 
@@ -928,6 +931,27 @@ public partial class MainWindow : Window
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Log($"解析用の控えを保存できませんでした: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 組み込まれた版。ウィンドウのタイトルに出す。
+    ///
+    /// 実機で試しては直す往復が続くため、
+    /// 今動かしているのがどのビルドかを取り違えないようにする。
+    /// </summary>
+    private static string AppVersion
+    {
+        get
+        {
+            var version = System.Reflection.Assembly
+                .GetExecutingAssembly()
+                .GetName()
+                .Version;
+
+            return version is null
+                ? ""
+                : $"v{version.Major}.{version.Minor}.{version.Build}";
         }
     }
 

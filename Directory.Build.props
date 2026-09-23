@@ -1,0 +1,16 @@
+<Project>
+
+  <!--
+    版の指定を 1 か所にまとめる。
+
+    利用者が繰り返し再ビルドして実機で試すため、
+    「今動かしているのがどのビルドか」を取り違えないようにする必要がある。
+    ここで決めた値がウィンドウのタイトルと EXE のプロパティに出る。
+  -->
+  <PropertyGroup>
+    <Version>0.0.1</Version>
+    <Product>RetroDumper</Product>
+    <Company>RetroDumper</Company>
+  </PropertyGroup>
+
+</Project>
