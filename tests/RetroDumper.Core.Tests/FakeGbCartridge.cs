@@ -42,7 +42,8 @@ public sealed class FakeGbCartridge : IRfcaLink
     public byte[] SendControl(uint opcode, uint address = 0, uint size = 0,
                               uint parameter = 0, uint headerField = 0x08) => new byte[8];
 
-    public void WriteBankRegister(CartridgeKind kind, uint opcode, uint address, byte value)
+    public void WriteBankRegister(CartridgeKind kind, uint opcode, uint address, byte value,
+                                  uint headerField = 0x08)
     {
         if (kind != CartridgeKind.GameBoy)
             throw new RfcaWriteBlockedException($"{kind} はこのカセットではありません");

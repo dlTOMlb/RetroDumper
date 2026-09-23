@@ -53,7 +53,8 @@ public sealed class FakeNesCartridge : IRfcaLink
     public byte[] SendControl(uint opcode, uint address = 0, uint size = 0,
                               uint parameter = 0, uint headerField = 0x08) => new byte[8];
 
-    public void WriteBankRegister(CartridgeKind kind, uint opcode, uint address, byte value)
+    public void WriteBankRegister(CartridgeKind kind, uint opcode, uint address, byte value,
+                                  uint headerField = 0x08)
     {
         if (MapperRegister.IsSaveMemory(kind, address))
             throw new RfcaWriteBlockedException($"0x{address:X4} はセーブ領域です");

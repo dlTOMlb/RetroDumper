@@ -40,13 +40,14 @@ public interface IRfcaLink
     /// 対象は <see cref="MapperRegister.IsBankRegister"/> が認める範囲だけで、
     /// GBA は含まれない。
     /// </summary>
-    void WriteBankRegister(CartridgeKind kind, uint opcode, uint address, byte value);
+    void WriteBankRegister(CartridgeKind kind, uint opcode, uint address, byte value,
+                           uint headerField = 0x08);
 
     /// <summary>
     /// 指定 opcode のバスから読み出す。
     ///
     /// <paramref name="headerField"/> はリクエストの 2 つ目のフィールド。
-    /// SFC / MD / マークIII は 0x08 だが、GBA だけは 0x00 でないと受け付けられない。
+    /// 通常は 0x08。実機では 0x00 も受理されるため、機種による制約ではない。
     /// </summary>
     byte[] Read(uint opcode, uint address, int size, uint headerField = 0x08);
 

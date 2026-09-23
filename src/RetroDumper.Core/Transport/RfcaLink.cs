@@ -735,7 +735,8 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// <exception cref="RfcaWriteBlockedException">
     /// 範囲外のアドレス、または <see cref="AllowBankSwitching"/> が false のとき。
     /// </exception>
-    public void WriteBankRegister(CartridgeKind kind, uint opcode, uint address, byte value)
+    public void WriteBankRegister(CartridgeKind kind, uint opcode, uint address, byte value,
+                                  uint headerField = 0x08)
     {
         if (MapperRegister.IsSaveMemory(kind, address))
             throw new RfcaWriteBlockedException(
@@ -753,7 +754,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
                 $"アドレス 0x{address:X4} への書き込みを中止しました。");
 
         Trace?.Invoke($"バンク切り替え: 0x{address:X4} <- 0x{value:X2} ({kind.ToDisplayName()})");
-        WriteCore(opcode, address, stackalloc byte[] { value });
+        WriteCore(opcode, address, stackalloc byte[] { value }, headerField);
     }
 
     public void Write(uint opcode, uint address, ReadOnlySpan<byte> data)
@@ -775,7 +776,8 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// 呼び出す前に <see cref="AllowWrites"/> か
     /// <see cref="WriteBankRegister"/> の範囲判定を必ず通すこと。
     /// </summary>
-    private void WriteCore(uint opcode, uint address, ReadOnlySpan<byte> data)
+    private void WriteCore(uint opcode, uint address, ReadOnlySpan<byte> data,
+                           uint headerField = 0x08)
     {
         EnsureAwake();
 
@@ -783,7 +785,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
         {
             DrainInput();
 
-            SendRequest(opcode, address, (uint)data.Length);
+            SendRequest(opcode, address, (uint)data.Length, headerField);
 
             // ライト要求 ACK。実機は 8 バイトのゼロを返すが、
             // 異なる応答でも処理を続行する（dumpfreak と同じ挙動）。

@@ -6,29 +6,32 @@ namespace RetroDumper.Core.Probe;
 /// <summary>
 /// ファミコンのマッパーへの書き込みが、実際にカートリッジへ届いているかを測る。
 ///
-/// ワルキューレの冒険（マッパー 206 相当）で、次のことがログから確定した。
+/// ワルキューレの冒険（2026-09-24 実機）で次が確定した。
 ///
 ///   ・PRG は正しく読めている（先頭に "COPYRIGHT 1986 NAMCO LTD." が読める）
 ///   ・$8000 と $A000 の内容は違う（＝バンクは実在し、区別が付く）
-///   ・MMC3 / 206 の手順で R6 に 0 と 1 を書いても、$8000 の内容が変わらない
+///   ・R6 に 1 を書いても $8000 の内容が変わらない
 ///
 /// R6 は $8000 に見える 8KB バンクを選ぶレジスタなので、書き込みが届いて
-/// いれば内容は必ず変わる。変わらないということは、
-/// **アダプタは受理応答を返すのに、実際にはバスへ書いていない**。
+/// いれば内容は必ず変わる。**アダプタは受理応答を返すのに、実際には
+/// バスへ書いていない。** MMC1 も UxROM も MMC3 も揃って
+/// 「バンクが切り替わらない」のは、マッパーの選択ではなくこれが原因。
 ///
-/// 原因がフレームの組み立て方なのか、スロットの状態なのかは、
-/// 送り方を変えて試すしか確かめようがない。ここではその送り方を
-/// 何通りか用意し、読み戻して効果の有無を見る。
+/// ここでは送り方を変えて試し、読み戻して効果の有無を見る。
+/// 送る先は $8000 と $8001 だけに限る。セーブ領域 ($6000-$7FFF) には触れない。
 ///
-/// 送る先は $8000 と $8001 だけに限る。セーブ領域 ($6000-$7FFF) には
-/// 一切触れない。読み戻しの比較対象があるので、結果は明確に出る。
+/// **1 つ試すごとに応答が正常かを確かめること。**
+/// 初回の測定では、ある送り方でアダプタの応答が乱れ、それ以降の結果が
+/// すべて巻き添えで失敗した。乱れた状態で測った値は何の証拠にもならない。
 /// </summary>
 public static class NesWriteProbe
 {
-    private const uint Command = 0x8000;      // Namcot 108 / MMC3 のコマンドレジスタ
-    private const uint Data = 0x8001;         // 同 データレジスタ
+    private const uint Command = 0x8000;         // Namcot 108 / MMC3 のコマンドレジスタ
+    private const uint Data = 0x8001;            // 同 データレジスタ
     private const byte SelectPrgAt8000 = 0x06;   // R6 = $8000 の 8KB バンク
     private const int BankSize = 0x2000;
+
+    private delegate void Send(IRfcaLink link, uint address, byte value);
 
     public static void Run(IRfcaLink link, ProbeJournal journal)
     {
@@ -41,8 +44,6 @@ public static class NesWriteProbe
         journal.Write("");
 
         // 読みに行く前に、何が挿さっているかを確かめる。
-        // ここを飛ばすと、スロットが起きていないだけの応答なしを
-        // 「書き込みが効かない」と読み違える。
         var status = link.GetStatus();
 
         journal.Write($"カートリッジ種別: {status.Kind.ToDisplayName()} (0x{(byte)status.Kind:X2})");
@@ -77,6 +78,15 @@ public static class NesWriteProbe
         foreach (var (name, send) in Encodings())
         {
             journal.Write($"--- 送り方: {name}");
+
+            if (!IsHealthy(link, at8000, atA000))
+            {
+                journal.Write("　 アダプタの応答が乱れています。");
+                journal.Write("");
+                journal.Write("ここで打ち切ります。乱れた状態で測った値は証拠になりません。");
+                journal.Write("アダプタを挿し直してから、もう一度お試しください。");
+                return;
+            }
 
             uint after;
 
@@ -117,30 +127,60 @@ public static class NesWriteProbe
 
     /// <summary>
     /// 試す送り方。どれも $8000 / $8001 への 1 バイト書き込みで、
-    /// 違うのはフレームへの値の載せ方だけ。
+    /// 違うのは要求の組み立て方と、書いた後に送るものだけ。
+    ///
+    /// 並びは穏やかなものから。前の測定で、値を要求のパラメータ欄に
+    /// 載せる送り方はアダプタの応答を乱した。後ろに置く。
     /// </summary>
-    private static IEnumerable<(string Name, Action<IRfcaLink, uint, byte> Send)> Encodings()
+    private static IEnumerable<(string Name, Send Send)> Encodings()
     {
         // 現状の手順。要求を送り、応答を待ってから本体 1 バイトを送る。
-        yield return ("現状（要求 + データ 1 バイト）",
-            static (link, address, value) =>
-                link.WriteBankRegister(CartridgeKind.Famicom, RfcaOpcode.NesCpuWrite, address, value));
+        yield return ("現状（要求 + データ 1 バイト）", Plain);
+
+        // 書き込みの直後に状態要求を送る。
+        // リードでは ACK の後に状態要求を送らないとデータが流れてこない。
+        // ライトにも同じ「つつき」が要るのではないか、という見込み。
+        yield return ("書き込みごとに状態要求 (0x06)", (link, address, value) =>
+        {
+            Plain(link, address, value);
+            link.GetStatus();
+        });
+
+        // 書き込みの直後にスロット確定を送る。
+        yield return ("書き込みごとにスロット確定 (0x05)", (link, address, value) =>
+        {
+            Plain(link, address, value);
+            link.SendControl(RfcaOpcode.SlotCommit);
+        });
+
+        // ヘッダ欄を 0x00 にして本体を送る。
+        yield return ("ヘッダ欄 0x00 + データ 1 バイト", (link, address, value) =>
+            link.WriteBankRegister(
+                CartridgeKind.Famicom, RfcaOpcode.NesCpuWrite, address, value, headerField: 0x00));
 
         // 値を要求のパラメータ欄に載せ、本体は送らない。
-        yield return ("パラメータに値を載せる（本体なし）",
-            static (link, address, value) =>
-                link.SendControl(RfcaOpcode.NesCpuWrite, address, size: 0, parameter: value));
+        yield return ("パラメータに値を載せる（本体なし）", (link, address, value) =>
+            link.SendControl(RfcaOpcode.NesCpuWrite, address, size: 0, parameter: value));
+    }
 
-        // 同上、ヘッダ欄を 0x00 にする。
-        yield return ("パラメータに値を載せる（ヘッダ欄 0x00）",
-            static (link, address, value) =>
-                link.SendControl(RfcaOpcode.NesCpuWrite, address, size: 0, parameter: value,
-                                 headerField: 0x00));
+    private static void Plain(IRfcaLink link, uint address, byte value)
+        => link.WriteBankRegister(CartridgeKind.Famicom, RfcaOpcode.NesCpuWrite, address, value);
 
-        // 値をパラメータに載せ、サイズも 1 と申告する（本体は送らない）。
-        yield return ("パラメータに値を載せ、サイズ 1 と申告",
-            static (link, address, value) =>
-                link.SendControl(RfcaOpcode.NesCpuWrite, address, size: 1, parameter: value));
+    /// <summary>
+    /// アダプタがまだまともに応答するか。
+    /// 既知のどちらかのバンクが読めていれば正常とみなす。
+    /// </summary>
+    private static bool IsHealthy(IRfcaLink link, uint at8000, uint atA000)
+    {
+        try
+        {
+            uint now = Crc(link, 0x8000);
+            return now == at8000 || now == atA000;
+        }
+        catch (RfcaException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
