@@ -237,14 +237,6 @@ public static class GbaSave
         if (size == 0)
             throw new RfcaException("セーブ装置の種類が分かりません。");
 
-        if (IsEeprom(type))
-            throw new RfcaException(
-                "EEPROM への書き込みは行いません。" + Environment.NewLine +
-                "2026-09-24 の実機確認で、書き込んだ 512 バイトのうち 110 バイトが " +
-                "化けることが分かりました。届いてはいるものの内容が壊れるため、" +
-                "原因が分かるまで塞いでいます。" + Environment.NewLine +
-                "セーブの吸い出しは行えます。書き戻しが必要な場合は " +
-                "RetroFreakDumper をお使いください。");
 
         if (data.Length > size)
             throw new RfcaException(
@@ -275,6 +267,28 @@ public static class GbaSave
         // 参照実装はセーブの読み書きの前に必ずスロットを選び直す。
         link.ReinitializeSlot();
 
+        // **書く前に、読み出しが安定しているかを確かめる。**
+        //
+        // 2026-09-24 の実機で、同じカセットを 2 回読んで 2 バイト違った。
+        // 読み出しが揺れていると照合そのものが成立せず、
+        // 「書けたのか壊したのか」を判断できないまま書くことになる。
+        // それは利用者のセーブを賭けるに値しない。安定してから書く。
+        if (IsEeprom(type))
+        {
+            var (stable, differences) = CheckReadStability(link, type, cancellationToken);
+
+            if (!stable)
+                throw new RfcaException(
+                    $"読み出しが安定していないため、書き込みを中止しました。" +
+                    Environment.NewLine +
+                    $"同じ内容を 2 回読んで {differences} バイト違いました。" +
+                    Environment.NewLine +
+                    "この状態で書くと、書けたのか壊したのかを判断できません。" +
+                    "カートリッジを挿し直し、端子を清掃してからお試しください。");
+
+            progress?.Report(new DumpProgress("読み出しの安定を確認しました", 0, size));
+        }
+
         if (type is GbaSaveType.Flash512k or GbaSaveType.Flash1M)
             EnsureKnownFlash(link, type);
 
@@ -301,12 +315,63 @@ public static class GbaSave
         // 読み戻しは装置いっぱいで行い、書いた分だけを突き合わせる。
         var readBack = Read(link, type, progress, cancellationToken);
 
-        for (int i = 0; i < size; i++)
-            if (readBack[i] != data[i])
-                throw new RfcaException(
-                    $"照合に失敗しました。{i:X5} 番地は 0x{data[i]:X2} を書いたはずですが " +
-                    $"0x{readBack[i]:X2} が読めました。" +
-                    "カートリッジのセーブデータが中途半端な状態になっている可能性があります。");
+        int at = FirstDifference(readBack, data, size);
+        if (at < 0) return;
+
+        // 食い違った。書き込みの失敗と、読み出しの揺れを区別する。
+        // もう一度読んで、2 回の読み出しが一致するかを見る。
+        link.ReinitializeSlot();
+
+        var again = Read(link, type, progress, cancellationToken);
+
+        if (FirstDifference(again, readBack, size) >= 0)
+            throw new RfcaException(
+                "書き込みは終えましたが、読み出しが安定しないため確認できません。" +
+                Environment.NewLine +
+                "同じ内容を 2 回読んで結果が違いました。" +
+                "カートリッジのセーブが壊れているかどうかは、この結果からは分かりません。" +
+                Environment.NewLine +
+                "挿し直してから、もう一度書き込んでください。");
+
+        int mismatch = FirstDifference(again, data, size);
+
+        if (mismatch < 0) return;
+
+        throw new RfcaException(
+            $"照合に失敗しました。{mismatch:X5} 番地は 0x{data[mismatch]:X2} を書いたはずですが " +
+            $"0x{again[mismatch]:X2} が読めました（2 回読んで同じ結果）。" +
+            "カートリッジのセーブデータが中途半端な状態になっている可能性があります。");
+    }
+
+    /// <summary>最初に食い違う位置。すべて同じなら -1。</summary>
+    private static int FirstDifference(byte[] left, byte[] right, int length)
+    {
+        for (int i = 0; i < length; i++)
+            if (left[i] != right[i]) return i;
+
+        return -1;
+    }
+
+    /// <summary>
+    /// 読み出しが安定しているかを見る。2 回読んで突き合わせるだけ。
+    ///
+    /// 書き込みは一切行わない。カートリッジの内容も変えない。
+    /// </summary>
+    public static (bool Stable, int Differences) CheckReadStability(
+        IRfcaLink link, GbaSaveType type, CancellationToken cancellationToken = default)
+    {
+        var first = Read(link, type, null, cancellationToken);
+
+        link.ReinitializeSlot();
+
+        var second = Read(link, type, null, cancellationToken);
+
+        int differences = 0;
+
+        for (int i = 0; i < first.Length; i++)
+            if (first[i] != second[i]) differences++;
+
+        return (differences == 0, differences);
     }
 
     /// <summary>

@@ -788,12 +788,81 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     public bool AllowSaveWrites { get; set; }
 
     /// <summary>
-    /// スロットを選び直す。セーブの読み書きの前に送る。
+    /// ポートを開き直し、スロットを選び直す。セーブの読み書きの前に送る。
     ///
-    /// 参照実装は毎回の読み書きの前に 0x04(0) → 0x05 → 200ms 待ちを送る。
-    /// こちらは接続時の 1 度きりだった。
+    /// 参照実装 (RetroFreakDumper) は、セーブの読み書きのたびに
+    /// **シリアルポートそのものを開き直している**。
+    ///
+    ///   Initialize()   : Open() → 0x04(0) → 0x05 → 200ms 待ち
+    ///   DumpFinished() : 0x05 → Close()
+    ///
+    /// Open() はポートを開いて受信バッファを捨てる。USB CDC の状態が
+    /// ここで一度リセットされる。こちらは接続時に開いたまま使い続けていた。
+    ///
+    /// EEPROM の読み書きが安定しない件で見つかった差分。
+    /// 同じカセットを 2 回読んで 2 バイト違う、という現象が出ている。
     /// </summary>
-    public void ReinitializeSlot() => EnsureAwake(force: true);
+    public void ReinitializeSlot()
+    {
+        lock (_gate)
+        {
+            ReopenPort();
+        }
+
+        EnsureAwake(force: true);
+    }
+
+    /// <summary>
+    /// ポートを閉じて開き直す。失敗したら開いたままで続ける。
+    ///
+    /// 開き直しは通信の状態を捨てるための手段であって、目的ではない。
+    /// ここで例外を投げると、元々できていた読み書きまで巻き添えになる。
+    /// </summary>
+    private void ReopenPort()
+    {
+        try
+        {
+            if (_port.IsOpen) _port.Close();
+
+            // 閉じた直後に開くと拒まれることがあるので少し待つ。
+            Thread.Sleep(ReopenGapMilliseconds);
+
+            for (int attempt = 0; attempt < ReopenAttempts; attempt++)
+            {
+                try
+                {
+                    _port.Open();
+                    break;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Thread.Sleep(ReopenGapMilliseconds);
+                }
+            }
+
+            if (!_port.IsOpen)
+            {
+                Trace?.Invoke("WARN: ポートを開き直せませんでした");
+                return;
+            }
+
+            // 開くと DTR/RTS が立ち、CDC によってはリセット扱いになる。
+            Thread.Sleep(SettleMilliseconds);
+            DrainInput();
+
+            Trace?.Invoke("ポートを開き直しました");
+        }
+        catch (Exception ex)
+        {
+            Trace?.Invoke($"WARN: ポートの開き直しに失敗しました ({ex.GetType().Name})");
+        }
+    }
+
+    /// <summary>ポートを閉じてから開くまでの間隔。</summary>
+    private const int ReopenGapMilliseconds = 120;
+
+    /// <summary>開き直しの試行回数。参照実装も 3 回試している。</summary>
+    private const int ReopenAttempts = 3;
 
     /// <summary>
     /// セーブ領域へ書く。

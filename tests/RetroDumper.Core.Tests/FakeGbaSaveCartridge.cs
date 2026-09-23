@@ -20,6 +20,13 @@ public sealed class FakeGbaSaveCartridge(int saveSize) : IRfcaLink
     /// <summary>検証用: 読み戻しで 1 バイトだけ化けさせる。照合の確認に使う。</summary>
     public int CorruptAt { get; set; } = -1;
 
+    /// <summary>
+    /// 検証用: 読むたびに値が変わる位置。実機で起きた読み出しの揺れを模す。
+    /// </summary>
+    public int UnstableAt { get; set; } = -1;
+
+    private byte _jitter;
+
     public byte[] Snapshot() => _save.ToArray();
 
     public void Preset(byte[] data) => data.CopyTo(_save, 0);
@@ -68,6 +75,9 @@ public sealed class FakeGbaSaveCartridge(int saveSize) : IRfcaLink
 
         if (CorruptAt >= address && CorruptAt < address + destination.Length)
             destination[(int)(CorruptAt - address)] ^= 0xFF;
+
+        if (UnstableAt >= address && UnstableAt < address + destination.Length)
+            destination[(int)(UnstableAt - address)] ^= _jitter++ % 2 == 0 ? (byte)0x00 : (byte)0xFF;
     }
 
     public void Write(uint opcode, uint address, ReadOnlySpan<byte> data)

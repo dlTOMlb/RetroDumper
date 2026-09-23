@@ -133,27 +133,61 @@ public sealed class GbaSaveWriteTests
         => Assert.Equal(GbaSaveType.Sram, GbaSave.MatchEepromToSize(GbaSaveType.Sram, 512));
 
     /// <summary>
-    /// **EEPROM への書き込みは行わない。**
+    /// **書く前に、読み出しが安定しているかを確かめること。**
     ///
-    /// 2026-09-24 の実機確認で、512 バイトを書いたうち 110 バイトが
-    /// 化けた。書き込み自体は届いているが内容が壊れる。
-    /// 原因が分かるまで塞ぐ。吸い出しは行える。
-    ///
-    /// 直したと思ったら、まずこのテストを消す前に実機で確かめること。
+    /// 2026-09-24 の実機で、同じカセットを 2 回読んで 2 バイト違った。
+    /// 読み出しが揺れていると照合そのものが成立せず、
+    /// 「書けたのか壊したのか」を判断できないまま書くことになる。
+    /// その状態では書かずに止める。
     /// </summary>
-    [Theory]
-    [InlineData(GbaSaveType.Eeprom4k, 512)]
-    [InlineData(GbaSaveType.Eeprom64k, 8192)]
-    public void EEPROMには書き込まない(GbaSaveType type, int size)
+    [Fact]
+    public void 読み出しが不安定なら書き込まない()
     {
-        var cart = new FakeGbaSaveCartridge(size) { AllowSaveWrites = true };
+        var cart = new FakeGbaSaveCartridge(512) { AllowSaveWrites = true, UnstableAt = 100 };
         var before = cart.Snapshot();
 
         var error = Assert.Throws<RfcaException>(
-            () => GbaSave.Write(cart, type, Pattern(size)));
+            () => GbaSave.Write(cart, GbaSaveType.Eeprom4k, Pattern(512)));
 
-        Assert.Contains("EEPROM への書き込みは行いません", error.Message);
+        Assert.Contains("読み出しが安定していない", error.Message);
         Assert.Equal(before, cart.Snapshot());
+    }
+
+    /// <summary>安定していれば EEPROM にも書けること。</summary>
+    [Fact]
+    public void 読み出しが安定していればEEPROMにも書ける()
+    {
+        var cart = new FakeGbaSaveCartridge(512) { AllowSaveWrites = true };
+        var data = Pattern(512);
+
+        GbaSave.Write(cart, GbaSaveType.Eeprom4k, data);
+
+        Assert.Equal(data, cart.Snapshot());
+    }
+
+    /// <summary>読み出しの安定性だけを見る。内容は変えないこと。</summary>
+    [Fact]
+    public void 安定性の確認は内容を変えない()
+    {
+        var cart = new FakeGbaSaveCartridge(512);
+        cart.Preset(Pattern(512));
+
+        var (stable, differences) = GbaSave.CheckReadStability(cart, GbaSaveType.Eeprom4k);
+
+        Assert.True(stable);
+        Assert.Equal(0, differences);
+        Assert.Equal(Pattern(512), cart.Snapshot());
+    }
+
+    [Fact]
+    public void 揺れているバイト数を数える()
+    {
+        var cart = new FakeGbaSaveCartridge(512) { UnstableAt = 7 };
+
+        var (stable, differences) = GbaSave.CheckReadStability(cart, GbaSaveType.Eeprom4k);
+
+        Assert.False(stable);
+        Assert.Equal(1, differences);
     }
 
     /// <summary>塞いでいるのは書き込みだけ。吸い出しは行えること。</summary>
