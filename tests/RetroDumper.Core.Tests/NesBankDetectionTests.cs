@@ -1,3 +1,4 @@
+using RetroDumper.Core.Transport;
 using RetroDumper.Core.Dumping;
 using RetroDumper.Core.Nes;
 using Xunit;
@@ -106,5 +107,53 @@ public sealed class NesBankDetectionTests
             data[i] = (byte)(i * 31 + (i >> 8) * 7 + 1);
 
         return data;
+    }
+}
+
+/// <summary>
+/// マッパー 206（Namcot 108）の登録と手順。
+///
+/// ワルキューレの冒険が使っている石。レジスタの構えは MMC3 と同じだが、
+/// PRG は R6/R7 の 2 本だけ、CHR は 2KB×2 + 1KB×4 に分かれている。
+/// 連続した 8KB を読むには 6 本すべてを並びが繋がるように設定する。
+/// </summary>
+public sealed class Namcot108Tests
+{
+    [Fact]
+    public void 総当たりの対象に入っている()
+        => Assert.Contains(NesMapper.All, m => m.Number == 206);
+
+    [Fact]
+    public void PRGはR6で切り替える()
+    {
+        var cart = new FakeNesCartridge(new byte[0x8000], []) { AllowWrites = true };
+        var mapper = NesMapper.ForNumber(206)!;
+
+        mapper.ReadPrgBank(new NesBus(cart), bank: 3, size: 0x2000, totalBanks: 8);
+
+        Assert.Equal([(0x8000u, (byte)0x06), (0x8001u, (byte)0x03)], cart.BankRegisterWrites);
+    }
+
+    /// <summary>
+    /// CHR は 6 本のレジスタが 1KB 単位で連続するように並ぶこと。
+    /// 1 本でも飛ぶと、読めた 8KB の途中だけ別のバンクが混ざる。
+    /// </summary>
+    [Fact]
+    public void CHRは6本のレジスタが連続する()
+    {
+        var cart = new FakeNesCartridge(new byte[0x8000], new byte[0x2000]) { AllowWrites = true };
+        var mapper = NesMapper.ForNumber(206)!;
+
+        mapper.ReadChrBank(new NesBus(cart), bank: 1, size: 0x2000);
+
+        // 8KB バンク 1 は 1KB バンク 8 から始まる。
+        Assert.Equal(
+            [(0x8000u, (byte)0x00), (0x8001u, (byte)8),
+             (0x8000u, (byte)0x01), (0x8001u, (byte)10),
+             (0x8000u, (byte)0x02), (0x8001u, (byte)12),
+             (0x8000u, (byte)0x03), (0x8001u, (byte)13),
+             (0x8000u, (byte)0x04), (0x8001u, (byte)14),
+             (0x8000u, (byte)0x05), (0x8001u, (byte)15)],
+            cart.BankRegisterWrites);
     }
 }

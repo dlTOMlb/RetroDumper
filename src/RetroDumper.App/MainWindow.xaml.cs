@@ -207,6 +207,7 @@ public partial class MainWindow : Window
         IdentifyButton.IsEnabled = connected;
         DiagnoseButton.IsEnabled = connected;
         SlotComparisonButton.IsEnabled = connected;
+        NesWriteProbeButton.IsEnabled = connected;
         GbaHeadSampleButton.IsEnabled = connected;
         DumpButton.IsEnabled = connected && _info is not null;
     }
@@ -710,6 +711,50 @@ public partial class MainWindow : Window
     /// 状態要求と判明済みリードを記録する。
     /// カートリッジを差し替えながら繰り返し押して、1 つのファイルで見比べる。
     /// </summary>
+    /// <summary>
+    /// マッパーへの書き込みが実際に届いているかを測る。
+    ///
+    /// ワルキューレの冒険で、PRG は正しく読めているのに、どの手順で
+    /// バンクを切り替えても内容が変わらないことが分かった。アダプタは
+    /// 受理応答を返すので、送れていないことがログからは見えない。
+    /// 読み戻して比べるしか確かめようがない。
+    /// </summary>
+    private async void NesWriteProbe_Click(object sender, RoutedEventArgs e)
+    {
+        if (_link is null) return;
+
+        SetBusy(true);
+
+        using var journal = ProbeJournal.CreateNextTo(
+            "nes-writeprobe",
+            line => Dispatcher.BeginInvoke(() => Log(line)));
+
+        try
+        {
+            var link = _link;
+            await Task.Run(() => NesWriteProbe.Run(link, journal));
+
+            Log($"書き込み検査を記録しました: {journal.Path}");
+        }
+        catch (RfcaDisconnectedException ex)
+        {
+            journal.Write($"！！ {ex.Message}");
+            Log(ex.Message);
+            MessageBox.Show(this, ex.Message, "アダプタが切断されました",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            Disconnect();
+        }
+        catch (Exception ex)
+        {
+            journal.Write($"！！ {ex.GetType().Name}: {ex.Message}");
+            Log($"検査に失敗しました: {ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
     private async void SlotComparison_Click(object sender, RoutedEventArgs e)
     {
         if (_link is null) return;
@@ -848,6 +893,7 @@ public partial class MainWindow : Window
         DetectButton.IsEnabled = live;
         DiagnoseButton.IsEnabled = live;
         SlotComparisonButton.IsEnabled = live;
+        NesWriteProbeButton.IsEnabled = live;
         GbaHeadSampleButton.IsEnabled = live;
         AutoDetectPortButton.IsEnabled = !busy && _link is null;
 

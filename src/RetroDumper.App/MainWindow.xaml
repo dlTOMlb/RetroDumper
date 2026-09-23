@@ -228,6 +228,9 @@
                             <Button x:Name="SlotComparisonButton" Content="スロット比較を記録" Click="SlotComparison_Click"
                                     IsEnabled="False" MinWidth="150" FontWeight="Bold" Background="#FFF3CD"
                                     ToolTip="状態要求と判明済みリードを記録します。カートリッジを差し替えて何度も押し、slot-comparison.txt を見比べます。" />
+                            <Button x:Name="NesWriteProbeButton" Content="ファミコン書き込み検査" Click="NesWriteProbe_Click"
+                                    IsEnabled="False" MinWidth="175" FontWeight="Bold" Background="#FFE0E0"
+                                    ToolTip="マッパーのレジスタ ($8000/$8001) への書き込みが実際に届いているかを測ります。送り方を何通りか試し、$8000 のバンクが入れ替わるかを見ます。セーブ領域には触れません。" />
                             <TextBox x:Name="SlotLabelBox" Width="150" VerticalAlignment="Center" Margin="0,0,10,0"
                                      Text="GBA 挿入"
                                      ToolTip="今どういう状態で測っているかを書きます（例: スロット空 / GBA 挿入 / SFC 挿入）。" />

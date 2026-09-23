@@ -63,6 +63,7 @@ public abstract class NesMapper
         new UxRomMapper(),
         new CnRomMapper(),
         new Mmc3Mapper(),
+        new Namcot108Mapper(),
     ];
 
     public static NesMapper? ForNumber(int number)
@@ -211,5 +212,54 @@ public sealed class Mmc3Mapper : NesMapper
         bus.CpuWrite(0x8000, 0x02);          // R2 = $1000 の CHR バンク
         bus.CpuWrite(0x8001, (byte)bank);
         return bus.PpuRead(0x1000, size);
+    }
+}
+
+/// <summary>
+/// マッパー 206。Namcot 108（DxROM）。
+///
+/// ナムコが 1986 年前後に使った石で、ワルキューレの冒険、ドラゴンバスター
+/// などが該当する。レジスタの構えは MMC3 と同じ（$8000 に番号、$8001 に値）
+/// だが、PRG は R6/R7 の 2 本だけで、$C000-$FFFF は最終 2 バンクに固定。
+///
+/// CHR は 2KB×2 ($0000, $0800) と 1KB×4 ($1000-$1FFF) に分かれている。
+/// 連続した 8KB として読むには、6 本のレジスタを並びが繋がるように
+/// 設定してから PPU $0000 をまとめて読む。
+/// </summary>
+public sealed class Namcot108Mapper : NesMapper
+{
+    public override int Number => 206;
+    public override string Name => "Namcot 108";
+    public override int PrgBankSize => 0x2000;
+    public override int ChrBankSize => 0x2000;
+
+    public override (long, long) PrgSizeRange => (32 * 1024, 128 * 1024);
+    public override (long, long) ChrSizeRange => (8 * 1024, 64 * 1024);
+
+    private static void Select(NesBus bus, byte register, byte value)
+    {
+        bus.CpuWrite(0x8000, register);
+        bus.CpuWrite(0x8001, value);
+    }
+
+    public override byte[] ReadPrgBank(NesBus bus, int bank, int size, int totalBanks)
+    {
+        Select(bus, 0x06, (byte)bank);          // R6 = $8000 の 8KB バンク
+        return bus.CpuRead(0x8000, size);
+    }
+
+    public override byte[] ReadChrBank(NesBus bus, int bank, int size)
+    {
+        // 1KB 単位の通し番号。8KB バンク n は 1KB バンク 8n から始まる。
+        int at = bank * 8;
+
+        Select(bus, 0x00, (byte)at);            // R0: $0000-$07FF (2KB、bit0 は無視される)
+        Select(bus, 0x01, (byte)(at + 2));      // R1: $0800-$0FFF (2KB)
+        Select(bus, 0x02, (byte)(at + 4));      // R2: $1000-$13FF (1KB)
+        Select(bus, 0x03, (byte)(at + 5));      // R3: $1400-$17FF
+        Select(bus, 0x04, (byte)(at + 6));      // R4: $1800-$1BFF
+        Select(bus, 0x05, (byte)(at + 7));      // R5: $1C00-$1FFF
+
+        return bus.PpuRead(0x0000, size);
     }
 }
