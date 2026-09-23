@@ -234,10 +234,16 @@ public static class GbaSave
         if (size == 0)
             throw new RfcaException("セーブ装置の種類が分かりません。");
 
-        if (data.Length != size)
+        if (data.Length > size)
             throw new RfcaException(
-                $"セーブデータの大きさが合いません。" +
+                $"セーブデータが大きすぎます。" +
                 $"{DisplayName(type)} は {size} バイトですが、{data.Length} バイト渡されました。");
+
+        // 装置より小さいファイルは、その分だけ書く。残りは触らない。
+        // RetroFreakDumper も同じ扱いで、短いファイルを拒まない。
+        // EEPROM は目印で容量が決まらないため、512B のセーブを
+        // 8KB と判定した装置へ書き戻す場面が実際に起きる。
+        size = data.Length;
 
         if (type is GbaSaveType.Flash512k or GbaSaveType.Flash1M)
             EnsureKnownFlash(link, type);
@@ -262,6 +268,7 @@ public static class GbaSave
 
         progress?.Report(new DumpProgress("書き込んだ内容を照合中", 0, size));
 
+        // 読み戻しは装置いっぱいで行い、書いた分だけを突き合わせる。
         var readBack = Read(link, type, progress, cancellationToken);
 
         for (int i = 0; i < size; i++)

@@ -69,16 +69,45 @@ public sealed class GbaSaveWriteTests
         Assert.Contains("照合に失敗", error.Message);
     }
 
+    /// <summary>装置に収まらないものは書かない。</summary>
     [Fact]
-    public void 大きさが合わなければ書き込まない()
+    public void 装置より大きければ書き込まない()
     {
         var cart = new FakeGbaSaveCartridge(32768) { AllowSaveWrites = true };
 
         var error = Assert.Throws<RfcaException>(
-            () => GbaSave.Write(cart, GbaSaveType.Sram, Pattern(1024)));
+            () => GbaSave.Write(cart, GbaSaveType.Sram, Pattern(65536)));
 
-        Assert.Contains("大きさが合いません", error.Message);
+        Assert.Contains("大きすぎます", error.Message);
         Assert.Equal(new byte[32768], cart.Snapshot());
+    }
+
+    /// <summary>
+    /// 装置より小さいファイルは、その分だけ書く。残りは触らない。
+    ///
+    /// 参照実装 (RetroFreakDumper) も短いファイルを拒まず、
+    /// buf の長さだけを書いている。EEPROM は目印で容量が決まらないため、
+    /// 512B のセーブを 8KB と判定した装置へ書き戻す場面が実際に起きる。
+    /// </summary>
+    [Fact]
+    public void 装置より小さければその分だけ書く()
+    {
+        var cart = new FakeGbaSaveCartridge(8192) { AllowSaveWrites = true };
+
+        var before = new byte[8192];
+        Array.Fill(before, (byte)0xAB);
+        cart.Preset(before);
+
+        var data = Pattern(512);
+
+        GbaSave.Write(cart, GbaSaveType.Eeprom64k, data);
+
+        var after = cart.Snapshot();
+
+        Assert.Equal(data, after[..512]);
+
+        // 残りは触らないこと。
+        Assert.All(after[512..], b => Assert.Equal(0xAB, b));
     }
 
     [Fact]

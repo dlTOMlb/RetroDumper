@@ -1271,17 +1271,28 @@ public partial class MainWindow : Window
                 }
             }
 
-            if (data.Length != size)
+            if (data.Length > size)
             {
                 string message =
-                    $"ファイルの大きさが {target.Label} と合いません。\n\n" +
-                    $"必要: {size} バイト\n選んだファイル: {data.Length} バイト";
+                    $"ファイルが {target.Label} より大きく、収まりません。\n\n" +
+                    $"装置: {size} バイト\n選んだファイル: {data.Length} バイト";
 
                 Log(message.Replace("\n", " "));
                 MessageBox.Show(this, message, "セーブの書き込み",
                     MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
+
+            // 装置より小さいファイルは、その分だけ書く。残りは触らない。
+            // 参照実装も短いファイルを拒まない。
+            string shortNote = data.Length < size
+                ? $"書き込むのは先頭 {data.Length} バイトで、" +
+                  $"残りの {size - data.Length} バイトはそのまま残ります。\n\n"
+                : "";
+
+            if (shortNote.Length > 0)
+                Log($"ファイルは {data.Length} バイトで、装置の {size} バイトより小さいため、" +
+                    "その分だけ書き込みます。残りはそのまま残ります。");
 
             var link = _link;
             var info = _info;
@@ -1304,7 +1315,8 @@ public partial class MainWindow : Window
                 "カートリッジのセーブデータを上書きします。\n\n" +
                 $"対象: {target.Label}\n" +
                 $"書き込むファイル: {Path.GetFileName(open.FileName)}\n" +
-                $"大きさ: {size} バイト\n\n" +
+                $"大きさ: {data.Length} バイト\n\n" +
+                shortNote +
                 $"現在のセーブは次の場所に控えてあります。\n{backupPath}\n\n" +
                 "書き込みを実行しますか？",
                 "セーブの書き込み", MessageBoxButton.YesNo, MessageBoxImage.Warning);
