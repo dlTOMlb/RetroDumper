@@ -32,8 +32,30 @@ public sealed class NesBus(IRfcaLink link)
     /// セーブ用 WRAM ($6000-$7FFF) は範囲外として弾かれる。
     /// </summary>
     public void CpuWrite(uint address, byte value)
-        => _link.WriteBankRegister(
+    {
+        _link.WriteBankRegister(
             CartridgeKind.Famicom, RfcaOpcode.NesCpuWrite, address, value);
+
+        // **書き込みの直後に $8000 から 8 バイト読む。**
+        //
+        // これを送らないと、書き込みはカートリッジに反映されない。
+        // アダプタは受理応答を返すので、送れていないことが応答からは分からず、
+        // 「バンクが切り替わらない」という症状としてだけ現れる。
+        // MMC1・UxROM・MMC3 が揃って切り替わらなかったのは、すべてこれが原因。
+        //
+        // 読んだ内容は使わない。バスを 1 回動かすことに意味がある。
+        // GBA のリードで、ACK の後に状態要求を送らないとデータが流れてこないのと
+        // 同じ構造で、この機種は書き込みにも「つつき」を必要とする。
+        //
+        // 根拠: RetroFreakDumper の NesScriptBase.CpuWrite が、
+        // NesCpuWrite の直後に必ず NesCpuRead(0x8000, 8) を送っている。
+        _link.Read(RfcaOpcode.NesCpuRead, PokeAddress, PokeSize);
+    }
+
+    /// <summary>書き込みを反映させるためのダミーリード。内容は使わない。</summary>
+    private const uint PokeAddress = 0x8000;
+
+    private const int PokeSize = 8;
 
     /// <summary>
     /// バスコンフリクトのあるマッパー（UxROM / CNROM）用の書き込み。

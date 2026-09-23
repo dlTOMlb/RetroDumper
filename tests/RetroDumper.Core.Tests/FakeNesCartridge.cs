@@ -43,6 +43,15 @@ public sealed class FakeNesCartridge : IRfcaLink
     /// <summary>検証用: マッパーのラッチへの書き込み。</summary>
     public List<(uint Address, byte Value)> BankRegisterWrites { get; } = [];
 
+    /// <summary>検証用: 送られたリード。書き込み後のつつきを確かめるのに使う。</summary>
+    public List<(uint Opcode, uint Address, int Size)> Reads { get; } = [];
+
+    /// <summary>検証用: 呼ばれた順序を確かめるためのフック。</summary>
+    public Action? OnWriteBankRegister { get; set; }
+
+    /// <summary>検証用: 同上。</summary>
+    public Action? OnRead { get; set; }
+
     public RfcaStatus GetStatus() =>
         new([0, 0, 0, 0, 4, 0, 0, 0, (byte)CartridgeKind.Famicom, 0, 0, 0]);
 
@@ -63,6 +72,7 @@ public sealed class FakeNesCartridge : IRfcaLink
             throw new RfcaWriteBlockedException($"0x{address:X4} はバンクレジスタではありません");
 
         BankRegisterWrites.Add((address, value));
+        OnWriteBankRegister?.Invoke();
 
         if (UxRomBanking && address >= 0x8000) _latch = value;
     }
@@ -76,6 +86,9 @@ public sealed class FakeNesCartridge : IRfcaLink
 
     public void Read(uint opcode, uint address, Span<byte> destination, uint headerField = 0x08)
     {
+        Reads.Add((opcode, address, destination.Length));
+        OnRead?.Invoke();
+
         if (opcode == RfcaOpcode.NesPpuRead)
         {
             Fill(destination, _chr, address, 0x2000);

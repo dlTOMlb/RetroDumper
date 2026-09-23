@@ -219,19 +219,25 @@ public sealed class Mmc3Mapper : NesMapper
 /// マッパー 206。Namcot 108（DxROM）。
 ///
 /// ナムコが 1986 年前後に使った石で、ワルキューレの冒険、ドラゴンバスター
-/// などが該当する。レジスタの構えは MMC3 と同じ（$8000 に番号、$8001 に値）
-/// だが、PRG は R6/R7 の 2 本だけで、$C000-$FFFF は最終 2 バンクに固定。
+/// などが該当する。レジスタの構えは MMC3 と同じ（$8000 に番号、$8001 に値）。
 ///
-/// CHR は 2KB×2 ($0000, $0800) と 1KB×4 ($1000-$1FFF) に分かれている。
-/// 連続した 8KB として読むには、6 本のレジスタを並びが繋がるように
-/// 設定してから PPU $0000 をまとめて読む。
+/// **PRG 32KB の基板はバンク切り替えを持たない。**
+/// CPU の A13/A14 が ROM に直結しており、R6/R7 に何を書いても内容は変わらない。
+/// バベルの塔（基板 3401）だけが例外で、32KB でも切り替えを使う。
+/// この性質を知らずに「R6 が効かない＝書き込みが届いていない」と判断して
+/// 遠回りした。切り替わらないことが、そのまま正常な基板の姿である。
+///
+/// CHR は切り替わる。$1000-$1FFF に 1KB×4 の窓があり、R2-R5 で選ぶ。
+/// 4KB ずつ読むのが素直で、MultiDumper の 206.nut も同じ読み方をしている。
 /// </summary>
 public sealed class Namcot108Mapper : NesMapper
 {
     public override int Number => 206;
     public override string Name => "Namcot 108";
     public override int PrgBankSize => 0x2000;
-    public override int ChrBankSize => 0x2000;
+
+    /// <summary>$1000-$13FF の 1KB 窓。R2 で選ぶ。</summary>
+    public override int ChrBankSize => 0x400;
 
     public override (long, long) PrgSizeRange => (32 * 1024, 128 * 1024);
     public override (long, long) ChrSizeRange => (8 * 1024, 64 * 1024);
@@ -244,22 +250,25 @@ public sealed class Namcot108Mapper : NesMapper
 
     public override byte[] ReadPrgBank(NesBus bus, int bank, int size, int totalBanks)
     {
-        Select(bus, 0x06, (byte)bank);          // R6 = $8000 の 8KB バンク
+        // 32KB の基板は切り替わらないので、素直に窓から読む。
+        // ここで R6 を使うと、どのバンクも同じ内容になってしまう。
+        if (totalBanks <= 4)
+            return bus.CpuRead(0x8000u + (uint)(bank * 0x2000), size);
+
+        // 最終 2 バンクは $C000-$FFFF に固定されている。
+        if (bank >= totalBanks - 2)
+            return bus.CpuRead(0xC000u + (uint)((bank - (totalBanks - 2)) * 0x2000), size);
+
+        Select(bus, 0x06, (byte)bank);
         return bus.CpuRead(0x8000, size);
     }
 
     public override byte[] ReadChrBank(NesBus bus, int bank, int size)
     {
-        // 1KB 単位の通し番号。8KB バンク n は 1KB バンク 8n から始まる。
-        int at = bank * 8;
-
-        Select(bus, 0x00, (byte)at);            // R0: $0000-$07FF (2KB、bit0 は無視される)
-        Select(bus, 0x01, (byte)(at + 2));      // R1: $0800-$0FFF (2KB)
-        Select(bus, 0x02, (byte)(at + 4));      // R2: $1000-$13FF (1KB)
-        Select(bus, 0x03, (byte)(at + 5));      // R3: $1400-$17FF
-        Select(bus, 0x04, (byte)(at + 6));      // R4: $1800-$1BFF
-        Select(bus, 0x05, (byte)(at + 7));      // R5: $1C00-$1FFF
-
-        return bus.PpuRead(0x0000, size);
+        // R2 の窓 ($1000-$13FF) だけを使い、1KB ずつ動かして読む。
+        // 窓を 4 つ並べて 4KB まとめて読むこともできるが、
+        // RetroFreakDumper はこの 1KB ずつの形を採っている。合わせておく。
+        Select(bus, 0x02, (byte)bank);
+        return bus.PpuRead(0x1000, size);
     }
 }

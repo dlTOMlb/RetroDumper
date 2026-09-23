@@ -134,26 +134,84 @@ public sealed class Namcot108Tests
         Assert.Equal([(0x8000u, (byte)0x06), (0x8001u, (byte)0x03)], cart.BankRegisterWrites);
     }
 
-    /// <summary>
-    /// CHR は 6 本のレジスタが 1KB 単位で連続するように並ぶこと。
-    /// 1 本でも飛ぶと、読めた 8KB の途中だけ別のバンクが混ざる。
-    /// </summary>
+    /// <summary>CHR は R2 の 1KB 窓を動かして読む。</summary>
     [Fact]
-    public void CHRは6本のレジスタが連続する()
+    public void CHRはR2の1KB窓で読む()
     {
         var cart = new FakeNesCartridge(new byte[0x8000], new byte[0x2000]) { AllowWrites = true };
         var mapper = NesMapper.ForNumber(206)!;
 
-        mapper.ReadChrBank(new NesBus(cart), bank: 1, size: 0x2000);
+        mapper.ReadChrBank(new NesBus(cart), bank: 5, size: 0x400);
 
-        // 8KB バンク 1 は 1KB バンク 8 から始まる。
+        Assert.Equal([(0x8000u, (byte)0x02), (0x8001u, (byte)5)], cart.BankRegisterWrites);
+
+        // 最後のリードは PPU $1000 からの 1KB。
         Assert.Equal(
-            [(0x8000u, (byte)0x00), (0x8001u, (byte)8),
-             (0x8000u, (byte)0x01), (0x8001u, (byte)10),
-             (0x8000u, (byte)0x02), (0x8001u, (byte)12),
-             (0x8000u, (byte)0x03), (0x8001u, (byte)13),
-             (0x8000u, (byte)0x04), (0x8001u, (byte)14),
-             (0x8000u, (byte)0x05), (0x8001u, (byte)15)],
-            cart.BankRegisterWrites);
+            (RfcaOpcode.NesPpuRead, 0x1000u, 0x400),
+            cart.Reads[^1]);
+    }
+
+    /// <summary>
+    /// PRG 32KB の基板は切り替わらないので、レジスタを触らずに窓から読むこと。
+    ///
+    /// CPU の A13/A14 が ROM に直結しているため、R6 に何を書いても
+    /// 内容は変わらない。それを知らずに R6 で読むと、どのバンクも
+    /// 同じ内容になり、吸い出しが壊れる。
+    /// </summary>
+    [Fact]
+    public void PRG32Kの基板はレジスタを触らない()
+    {
+        var cart = new FakeNesCartridge(new byte[0x8000], []) { AllowWrites = true };
+        var mapper = NesMapper.ForNumber(206)!;
+        var bus = new NesBus(cart);
+
+        mapper.ReadPrgBank(bus, bank: 0, size: 0x2000, totalBanks: 4);
+        mapper.ReadPrgBank(bus, bank: 3, size: 0x2000, totalBanks: 4);
+
+        Assert.Empty(cart.BankRegisterWrites);
+
+        Assert.Equal(
+            [(RfcaOpcode.NesCpuRead, 0x8000u, 0x2000),
+             (RfcaOpcode.NesCpuRead, 0xE000u, 0x2000)],
+            cart.Reads);
+    }
+}
+
+/// <summary>
+/// 書き込みは、直後に $8000 から 8 バイト読まないと反映されない。
+///
+/// アダプタは受理応答を返すので、送れていないことが応答からは分からない。
+/// 症状は「バンクが切り替わらない」としてだけ現れ、マッパーの選択を
+/// 疑う方向へ誘導される。実際 MMC1・UxROM・MMC3 が揃って落ちていた。
+///
+/// 根拠は RetroFreakDumper の NesScriptBase.CpuWrite。
+/// NesCpuWrite の直後に必ず NesCpuRead(0x8000, 8) を送っている。
+/// </summary>
+public sealed class NesWritePokeTests
+{
+    [Fact]
+    public void 書き込みの直後に8000から8バイト読む()
+    {
+        var cart = new FakeNesCartridge(new byte[0x8000], []) { AllowWrites = true };
+
+        new NesBus(cart).CpuWrite(0x8001, 0x42);
+
+        Assert.Equal([(0x8001u, (byte)0x42)], cart.BankRegisterWrites);
+        Assert.Equal([(RfcaOpcode.NesCpuRead, 0x8000u, 8)], cart.Reads);
+    }
+
+    /// <summary>つつきは書き込みの後に送ること。先に送っても意味がない。</summary>
+    [Fact]
+    public void つつきは書き込みの後に送る()
+    {
+        var order = new List<string>();
+        var cart = new FakeNesCartridge(new byte[0x8000], []) { AllowWrites = true };
+
+        cart.OnWriteBankRegister = () => order.Add("write");
+        cart.OnRead = () => order.Add("read");
+
+        new NesBus(cart).CpuWrite(0x8000, 0x06);
+
+        Assert.Equal(["write", "read"], order);
     }
 }

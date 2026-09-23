@@ -59,7 +59,12 @@ public sealed partial class NesDumper
             }
 
             // バンク切り替えが効いていないものは、吸い出す前に捨てる。
-            if (!BanksDiffer(bus, mapper, prg))
+            //
+            // ただし PRG で区別が付かないことは、それだけでは外れの証拠にならない。
+            // マッパー 206 の PRG 32KB 基板は CPU の A13/A14 が ROM に直結していて、
+            // レジスタに何を書いても PRG は動かない。動かないのが正常な姿で、
+            // 切り替わるのは CHR のほうになる。PRG で落とすと永久に候補に残らない。
+            if (!BanksDiffer(bus, mapper, prg) && !ChrBanksDiffer(bus, mapper, chr))
             {
                 attempted.Add($"{label}: バンクが切り替わらない");
                 continue;
@@ -163,6 +168,28 @@ public sealed partial class NesDumper
 
         byte[]? first = ReadBank(bus, mapper, 0, bankSize, isPrg: true);
         byte[]? last = ReadBank(bus, mapper, banks - 1, bankSize, isPrg: true);
+
+        if (first is null || last is null) return false;
+
+        return !first.AsSpan().SequenceEqual(last);
+    }
+
+    /// <summary>
+    /// CHR の先頭バンクと最終バンクが違う内容かを見る。
+    ///
+    /// PRG が動かない基板でも、CHR が切り替わればマッパーは合っている。
+    /// バンクが 1 つしかない構成では判定できないので false を返す
+    /// （PRG 側と違い、こちらは「区別が付かない」を肯定にしない）。
+    /// </summary>
+    private static bool ChrBanksDiffer(NesBus bus, NesMapper mapper, long chrSize)
+    {
+        int bankSize = mapper.ChrBankSize;
+        if (bankSize <= 0 || chrSize <= bankSize) return false;
+
+        int banks = (int)(chrSize / bankSize);
+
+        byte[]? first = ReadBank(bus, mapper, 0, bankSize, isPrg: false);
+        byte[]? last = ReadBank(bus, mapper, banks - 1, bankSize, isPrg: false);
 
         if (first is null || last is null) return false;
 
