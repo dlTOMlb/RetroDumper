@@ -53,7 +53,7 @@ public partial class MainWindow : Window
     /// <summary>ファミコンのマッパー候補。先頭は「自動（データベース）」。</summary>
     private static readonly (string Label, int? Number)[] NesMapperChoices =
     [
-        ("自動（データベース）", null),
+        ("自動（総当たりで特定）", null),
         .. NesMapper.All.Select(m => ($"{m.Number}: {m.Name}", (int?)m.Number)),
     ];
 

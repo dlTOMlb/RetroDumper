@@ -394,3 +394,117 @@ public sealed class NesDeadBusTests
         Assert.DoesNotContain(info.Warnings, w => w.Contains("バスを駆動していません"));
     }
 }
+
+/// <summary>
+/// マッパーの総当たり特定。
+///
+/// ファミコンのカセットはマッパー番号を申告しないので、外から知る方法がない。
+/// 対応マッパーを順に試し、吸い出した結果が No-Intro DAT と一致したものを
+/// 正解とする。「当てて、答え合わせをする」しかない。
+/// </summary>
+public sealed class NesAutoDetectTests : IDisposable
+{
+    private readonly string _dir;
+
+    public NesAutoDetectTests()
+    {
+        _dir = Path.Combine(Path.GetTempPath(), "rdnesauto-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_dir);
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
+    }
+
+    private static byte[] Rom(int kb, int salt)
+    {
+        var rom = new byte[kb * 1024];
+
+        for (int i = 0; i < rom.Length; i++)
+            rom[i] = (byte)(((i >> 10) * 131 + i * 17 + salt) & 0xFF);
+
+        return rom;
+    }
+
+    private static readonly DumpOptions AutoMapper = new()
+    {
+        NesMapperOverride = null,     // 総当たりさせる
+        IncludeSaveRam = false,
+        VerifyChecksum = false,
+    };
+
+    /// <summary>
+    /// 総当たりは DAT との一致で正解を決めるので、
+    /// DAT に載っていなければ特定できない。その場合は理由を説明して失敗する。
+    /// </summary>
+    [Fact]
+    public void DATに無ければ理由を添えて失敗する()
+    {
+        var cart = new FakeNesCartridge(Rom(32, 3), Rom(8, 11));
+        var dumper = new NesDumper();
+        var info = dumper.Identify(cart, AutoMapper);
+
+        var ex = Assert.Throws<RfcaException>(
+            () => dumper.Dump(cart, info, AutoMapper, null, CancellationToken.None));
+
+        Assert.Contains("マッパーを特定できませんでした", ex.Message);
+
+        // 何を試したのかが分かること。黙って失敗しない。
+        Assert.Contains("NROM", ex.Message);
+
+        // 次に何をすればよいかが書いてあること。
+        Assert.Contains("ファミコン詳細", ex.Message);
+    }
+
+    /// <summary>誤ったマッパーを試してもカセットへの書き込みは起きないこと。</summary>
+    [Fact]
+    public void 総当たり中もセーブ領域には書き込まない()
+    {
+        var cart = new FakeNesCartridge(Rom(32, 3), Rom(8, 11));
+        var dumper = new NesDumper();
+        var info = dumper.Identify(cart, AutoMapper);
+
+        try { dumper.Dump(cart, info, AutoMapper, null, CancellationToken.None); }
+        catch (RfcaException) { /* 特定できないのは想定内 */ }
+
+        // 内容を書き換えるライトは 1 件も起きない。
+        Assert.Empty(cart.Writes);
+
+        // マッパーのラッチへの書き込みは、すべて $8000-$FFFF に収まる。
+        Assert.All(cart.BankRegisterWrites, w =>
+            Assert.True(w.Address >= 0x8000, $"0x{w.Address:X4} は範囲外です"));
+    }
+
+    /// <summary>マッパーを指定すれば総当たりせず、その設定で吸い出すこと。</summary>
+    [Fact]
+    public void 指定があれば総当たりしない()
+    {
+        var prg = Rom(32, 3);
+        var cart = new FakeNesCartridge(prg, Rom(8, 11));
+
+        var options = new DumpOptions
+        {
+            NesMapperOverride = 0,
+            IncludeSaveRam = false,
+            VerifyChecksum = false,
+        };
+
+        var dumper = new NesDumper();
+        var info = dumper.Identify(cart, options);
+        var result = dumper.Dump(cart, info, options, null, CancellationToken.None);
+
+        Assert.Equal(prg, result.Rom.AsSpan(16, prg.Length).ToArray());
+    }
+
+    /// <summary>識別の警告が、総当たりで特定する旨を伝えること。</summary>
+    [Fact]
+    public void 識別は総当たりで特定する旨を伝える()
+    {
+        var cart = new FakeNesCartridge(Rom(32, 3), Rom(8, 11));
+
+        var info = new NesDumper().Identify(cart, AutoMapper);
+
+        Assert.Contains(info.Warnings, w => w.Contains("順に試して"));
+    }
+}

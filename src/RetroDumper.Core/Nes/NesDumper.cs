@@ -14,13 +14,15 @@ namespace RetroDumper.Core.Nes;
 /// カセットからは読めないため、次のどちらかで決める必要があります。
 ///
 ///   1. 利用者が選ぶ（<see cref="DumpOptions.NesMapperOverride"/>）
-///   2. データベースで同定する（<see cref="NesRomInfoDatabase"/>）
+///   2. データベースで同定する（<see cref="NesRomInfoDatabase"/>、
+///      鍵は PRG-ROM 先頭 1KB の SHA-1）
+///   3. 総当たりで特定する（対応マッパーを順に試し、
+///      No-Intro DAT と一致したものを正解とする）
 ///
-/// 同定の鍵は **PRG-ROM 先頭 1KB の SHA-1** です。
-/// リセット直後の $8000 から 1KB 読めば、マッパーが分からなくても取れます。
+/// 容量はバンクの折り返しから実測できるので、マッパーさえ決まれば自動で決まります。
 /// 出力は iNES ヘッダ (16 バイト) を付けた .nes 形式です。
 /// </summary>
-public sealed class NesDumper : ICartridgeDumper
+public sealed partial class NesDumper : ICartridgeDumper
 {
     public string Name => "ファミコン";
     public CartridgeKind Kind => CartridgeKind.Famicom;
@@ -107,15 +109,15 @@ public sealed class NesDumper : ICartridgeDumper
 
         if (mapperNo < 0)
             info.Warnings.Add(
-                "マッパーが分かりません。ファミコンのカセットはマッパー番号を申告しないため、" +
-                "データベースで同定できない場合は手動で指定する必要があります。");
+                "マッパーは未確定です。ファミコンのカセットはマッパー番号を申告しないためです。" +
+                "吸い出しを実行すると、対応マッパーを順に試して No-Intro DAT と一致したものを" +
+                "正解として採用します。分かっている場合は「ファミコン詳細」で指定すると速く済みます。");
         else if (mapper is null)
             info.Warnings.Add(
                 $"マッパー {mapperNo} には未対応です。現在対応しているのは " +
                 string.Join(" / ", NesMapper.All.Select(m => $"{m.Number} ({m.Name})")) + " です。");
 
-        if (prgSize <= 0)
-            info.Warnings.Add("PRG-ROM の容量が分かりません。手動で指定してください。");
+
 
         return info;
     }
@@ -141,48 +143,24 @@ public sealed class NesDumper : ICartridgeDumper
         IProgress<DumpProgress>? progress,
         CancellationToken cancellationToken)
     {
-        // 手動指定を優先し、無ければ識別で確定した値を使う。
-        int mapperNo = options.NesMapperOverride
-            ?? info.NesMapperNumber
-            ?? throw new RfcaException(
-                "マッパー番号が分かりません。ファミコンのカセットはマッパーを" +
-                "申告しないため、データベースで同定できない場合は手動で指定してください。");
-
-        var mapper = NesMapper.ForNumber(mapperNo)
-            ?? throw new RfcaException(
-                $"マッパー {mapperNo} には未対応です。現在対応しているのは " +
-                string.Join(" / ", NesMapper.All.Select(m => $"{m.Number} ({m.Name})")) + " です。");
-
         var bus = new NesBus(link);
-        mapper.Initialize(bus);
 
-        long prgSize = options.NesPrgSize is > 0 ? options.NesPrgSize.Value : info.NesPrgSize;
-        long chrSize = options.NesChrSize is > 0 ? options.NesChrSize.Value : info.NesChrSize;
+        // 手動指定を優先し、無ければ識別で確定した値を使う。
+        int? mapperNo = options.NesMapperOverride ?? info.NesMapperNumber;
 
-        // 指定が無ければ実測する。マッパーさえ決まれば容量は測れる。
-        if (prgSize <= 0) prgSize = DetectSize(bus, mapper, isPrg: true);
-
-        if (chrSize <= 0 && mapper.ChrBankSize > 0)
-            chrSize = DetectSize(bus, mapper, isPrg: false);
-
-        if (prgSize <= 0)
-            throw new RfcaException("PRG-ROM の容量を判定できませんでした。手動で指定してください。");
-
-        long total = prgSize + chrSize;
-        long done = 0;
-
-        var prg = ReadBanks(
-            bus, mapper, prgSize, mapper.PrgBankSize, isPrg: true,
-            progress, ref done, total, cancellationToken);
-
-        byte[] chr = [];
-
-        if (chrSize > 0 && mapper.ChrBankSize > 0)
-            chr = ReadBanks(
-                bus, mapper, chrSize, mapper.ChrBankSize, isPrg: false,
-                progress, ref done, total, cancellationToken);
-
-        byte[] rom = BuildINesFile(mapper.Number, prg, chr);
+        // マッパーが分からなければ総当たりで特定する。
+        byte[] rom = mapperNo is null
+            ? AutoDetectAndDump(bus, progress, cancellationToken)
+            : DumpWith(
+                bus,
+                NesMapper.ForNumber(mapperNo.Value)
+                    ?? throw new RfcaException(
+                        $"マッパー {mapperNo} には未対応です。現在対応しているのは " +
+                        string.Join(" / ", NesMapper.All.Select(m => $"{m.Number} ({m.Name})")) +
+                        " です。"),
+                options.NesPrgSize is > 0 ? options.NesPrgSize.Value : info.NesPrgSize,
+                options.NesChrSize is > 0 ? options.NesChrSize.Value : info.NesChrSize,
+                progress, cancellationToken);
 
         return new DumpResult
         {

@@ -84,7 +84,7 @@
                             <GroupBox Header="ファミコン詳細">
                                 <StackPanel>
                                     <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,0,0,4"
-                                               Text="ファミコンのカセットはヘッダを持たず、タイトルもマッパー番号も申告しません。マッパーを選んでください。容量は実測できます。タイトルは吸い出し後に No-Intro DAT で特定し、ファイル名の変更を提案します。" />
+                                               Text="ファミコンのカセットはヘッダを持たず、タイトルもマッパー番号も容量も申告しません。「自動」のままで吸い出すと、対応マッパーを順に試し、No-Intro DAT と一致したものを正解として採用します。マッパーが分かっている場合は指定すると速く済みます。" />
                                     <Label Content="マッパー" />
                                     <ComboBox x:Name="NesMapperCombo" />
                                     <Grid Margin="0,4,0,0">
