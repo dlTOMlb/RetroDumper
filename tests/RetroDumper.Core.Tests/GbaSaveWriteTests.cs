@@ -165,7 +165,31 @@ public sealed class GbaEepromSizeTests
 
         cart.Preset(whole);
 
-        Assert.Equal(GbaSaveType.Eeprom4k, GbaSave.RefineEepromSize(cart, GbaSaveType.Eeprom64k));
+        var probe = GbaSave.ProbeEepromSize(cart, GbaSaveType.Eeprom64k);
+
+        Assert.Equal(GbaSaveType.Eeprom4k, probe.Type);
+        Assert.True(probe.Determined);
+    }
+
+    /// <summary>
+    /// 折り返さず、先頭 512 バイトにだけ内容があって後ろが空の形もある。
+    /// アダプタや石によってどちらの見え方になるか変わるので、両方を根拠にする。
+    /// </summary>
+    [Fact]
+    public void 後ろが空でも512バイトと判断する()
+    {
+        var cart = new FakeGbaSaveCartridge(8192);
+        var data = new byte[8192];
+
+        Array.Fill(data, (byte)0xFF);
+        for (int i = 0; i < 512; i++) data[i] = (byte)(i * 7 + 1);
+
+        cart.Preset(data);
+
+        var probe = GbaSave.ProbeEepromSize(cart, GbaSaveType.Eeprom64k);
+
+        Assert.Equal(GbaSaveType.Eeprom4k, probe.Type);
+        Assert.True(probe.Determined);
     }
 
     [Fact]
@@ -178,20 +202,28 @@ public sealed class GbaEepromSizeTests
 
         cart.Preset(data);
 
-        Assert.Equal(GbaSaveType.Eeprom64k, GbaSave.RefineEepromSize(cart, GbaSaveType.Eeprom64k));
+        var probe = GbaSave.ProbeEepromSize(cart, GbaSaveType.Eeprom64k);
+
+        Assert.Equal(GbaSaveType.Eeprom64k, probe.Type);
+        Assert.True(probe.Determined);
     }
 
     /// <summary>
-    /// 中身が空のときは、どちらでも繰り返して見えるので判断できない。
-    /// 勝手に小さいほうへ倒さないこと。
+    /// 中身が空のときは、どちらでも同じに見えるので判断できない。
+    /// **決められなかったことを申告すること。**
+    /// 勝手に小さいほうへ倒さず、呼び出し側が別の手掛かりを使えるようにする。
     /// </summary>
     [Fact]
-    public void 中身が空なら判定を変えない()
+    public void 中身が空なら決められないと申告する()
     {
         var cart = new FakeGbaSaveCartridge(8192);
         cart.Preset(Enumerable.Repeat((byte)0xFF, 8192).ToArray());
 
-        Assert.Equal(GbaSaveType.Eeprom64k, GbaSave.RefineEepromSize(cart, GbaSaveType.Eeprom64k));
+        var probe = GbaSave.ProbeEepromSize(cart, GbaSaveType.Eeprom64k);
+
+        Assert.Equal(GbaSaveType.Eeprom64k, probe.Type);
+        Assert.False(probe.Determined);
+        Assert.Contains("空", probe.Reason);
     }
 
     /// <summary>EEPROM 以外は読みに行かないこと。</summary>
@@ -200,6 +232,9 @@ public sealed class GbaEepromSizeTests
     {
         var cart = new FakeGbaSaveCartridge(32768);
 
-        Assert.Equal(GbaSaveType.Sram, GbaSave.RefineEepromSize(cart, GbaSaveType.Sram));
+        var probe = GbaSave.ProbeEepromSize(cart, GbaSaveType.Sram);
+
+        Assert.Equal(GbaSaveType.Sram, probe.Type);
+        Assert.True(probe.Determined);
     }
 }

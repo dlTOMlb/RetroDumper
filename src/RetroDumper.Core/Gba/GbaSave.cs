@@ -98,19 +98,36 @@ public static class GbaSave
     };
 
     /// <summary>
-    /// EEPROM の容量を、読んだ内容から絞り込む。
+    /// EEPROM の容量を読んで絞り込んだ結果。
     ///
-    /// 4kbit (512B) の石を 8KB として読むと、512 バイトごとに同じ内容が
-    /// 繰り返して見える。折り返しているためで、これを手掛かりにする。
-    ///
-    /// ただし中身が空（全バイト同じ）のときは、どちらでも繰り返して見えるため
-    /// 判断できない。その場合は判定を変えない。
-    /// 読むだけで、書き込みは一切行わない。
+    /// Determined が false のときは根拠が得られていない。
+    /// その場合 Type は既定の 64kbit のままで、呼び出し側は別の手掛かり
+    /// （書き込むファイルの大きさなど）を使ってよい。
     /// </summary>
-    public static GbaSaveType RefineEepromSize(
+    public readonly record struct EepromProbe(GbaSaveType Type, bool Determined, string Reason);
+
+    /// <summary>
+    /// EEPROM の容量を、読んだ内容から判定する。
+    ///
+    /// 目印は 4kbit も 64kbit も同じ "EEPROM_V" で、**容量が書かれていない。**
+    /// 参照実装も一律 64kbit と判定し、4kbit は利用者の手動選択に任せている。
+    /// だが読めば分かることが多い。4kbit の石を 8KB として読むと、
+    /// アドレスの上位が無視されるぶん、次のどちらかの形で現れる。
+    ///
+    ///   ・512 バイトごとに同じ内容が折り返して見える
+    ///   ・先頭 512 バイトにだけ内容があり、その後ろは全部同じ値になる
+    ///
+    /// どちらも 64kbit では起きにくい形なので、根拠として使える。
+    /// 逆に 512 バイトより後ろに違う内容があれば 64kbit と断定できる。
+    ///
+    /// 中身が空（全バイト同じ）のときだけは、どちらでも同じに見えるため
+    /// 判断できない。**読むだけで、書き込みは一切行わない。**
+    /// </summary>
+    public static EepromProbe ProbeEepromSize(
         IRfcaLink link, GbaSaveType type, CancellationToken cancellationToken = default)
     {
-        if (type != GbaSaveType.Eeprom64k) return type;
+        if (AlternateEeprom(type) is null)
+            return new EepromProbe(type, true, "");
 
         byte[] data;
 
@@ -118,20 +135,38 @@ public static class GbaSave
         {
             data = Read(link, GbaSaveType.Eeprom64k, null, cancellationToken);
         }
-        catch (RfcaException)
+        catch (RfcaException ex)
         {
-            return type;
+            return new EepromProbe(
+                GbaSaveType.Eeprom64k, false, $"読み出しに失敗しました ({ex.Message})");
         }
 
-        if (IsFlat(data)) return type;
+        int small = SizeOf(GbaSaveType.Eeprom4k);
 
-        return RepeatsEvery(data, SizeOf(GbaSaveType.Eeprom4k))
-            ? GbaSaveType.Eeprom4k
-            : type;
+        if (IsFlat(data))
+            return new EepromProbe(
+                GbaSaveType.Eeprom64k, false,
+                "セーブの中身が空のため、512B と 8KB を読み分けられません");
+
+        if (RepeatsEvery(data, small))
+            return new EepromProbe(
+                GbaSaveType.Eeprom4k, true,
+                $"{small} バイトごとに同じ内容が折り返しています");
+
+        if (IsFlat(data.AsSpan(small)))
+            return new EepromProbe(
+                GbaSaveType.Eeprom4k, true,
+                $"先頭 {small} バイトにだけ内容があり、その後ろは空です");
+
+        return new EepromProbe(
+            GbaSaveType.Eeprom64k, true,
+            $"{small} バイトより後ろにも内容があります");
     }
 
     private static bool IsFlat(ReadOnlySpan<byte> data)
     {
+        if (data.Length == 0) return true;
+
         foreach (byte b in data)
             if (b != data[0]) return false;
 
