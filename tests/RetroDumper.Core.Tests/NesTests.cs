@@ -344,3 +344,53 @@ public sealed class NesMapperSizeRangeTests
     public void PRGバンク数の上限(int mapper, int expected)
         => Assert.Equal(expected, NesMapper.ForNumber(mapper)!.MaxPrgBanks);
 }
+
+/// <summary>
+/// 読み出しが成立していないことの検出。
+///
+/// GBA で「アダプタは種別を返すのにバスが死んでいる」状態を
+/// ソフトの問題と誤認し、長時間を費やした経緯がある。
+/// ファミコンでも同じ見落としをしないよう、識別の時点で警告する。
+/// </summary>
+public sealed class NesDeadBusTests
+{
+    private static byte[] Flat(int size, byte value)
+    {
+        var rom = new byte[size];
+        Array.Fill(rom, value);
+        return rom;
+    }
+
+    private static readonly DumpOptions Options = new()
+    {
+        NesMapperOverride = 0,
+        IncludeSaveRam = false,
+        VerifyChecksum = false,
+    };
+
+    [Theory]
+    [InlineData(0xFF)]
+    [InlineData(0x00)]
+    public void 全バイト同じ値なら警告する(byte value)
+    {
+        var cart = new FakeNesCartridge(Flat(32 * 1024, value), []);
+
+        var info = new NesDumper().Identify(cart, Options);
+
+        Assert.Contains(info.Warnings, w => w.Contains("バスを駆動していません"));
+        Assert.Contains(info.Warnings, w => w.Contains("挿し直"));
+    }
+
+    [Fact]
+    public void 実データが読めていれば警告しない()
+    {
+        var rom = new byte[32 * 1024];
+        for (int i = 0; i < rom.Length; i++) rom[i] = (byte)((i >> 10) * 131 + i * 17);
+
+        var cart = new FakeNesCartridge(rom, []);
+
+        var info = new NesDumper().Identify(cart, Options);
+
+        Assert.DoesNotContain(info.Warnings, w => w.Contains("バスを駆動していません"));
+    }
+}

@@ -69,3 +69,36 @@ public sealed class FileNamingTests
     public void 途中の連続した空白はまとめない()
         => Assert.Equal("A   B.md", FileNaming.MakeRomFileName("A　　　B", ".md"));
 }
+
+/// <summary>
+/// No-Intro で特定した名前からファイル名を作る経路。
+///
+/// ファミコンのカセットはタイトルを持たないため、吸い出して照合するまで
+/// 名前が分からない。保存ダイアログを吸い出しの後ろに置き、
+/// 特定できた名前を最初から入れておくことで、利用者が名前を打つ必要をなくした。
+/// </summary>
+public sealed class NoIntroNamingTests
+{
+    [Theory]
+    [InlineData("Super Mario Bros. (Japan)", ".nes", "Super Mario Bros. (Japan).nes")]
+    [InlineData("Crash Bandicoot Advance (Japan)", ".gba", "Crash Bandicoot Advance (Japan).gba")]
+    [InlineData("Hoshi no Kirby 3 (Japan)", ".sfc", "Hoshi no Kirby 3 (Japan).sfc")]
+    public void No_Intro名がそのままファイル名になる(string game, string ext, string expected)
+        => Assert.Equal(expected, FileNaming.MakeRomFileName(game, ext));
+
+    /// <summary>
+    /// No-Intro の命名にはコロンやスラッシュを含むものがある。
+    /// Windows のファイル名に使えないので置き換える必要がある。
+    /// </summary>
+    [Theory]
+    [InlineData("Game: Subtitle (USA)", "Game_ Subtitle (USA).nes")]
+    [InlineData("A / B (Japan)", "A _ B (Japan).nes")]
+    [InlineData("What? (Europe)", "What_ (Europe).nes")]
+    public void 使えない文字を含む名前でも保存できる(string game, string expected)
+        => Assert.Equal(expected, FileNaming.MakeRomFileName(game, ".nes"));
+
+    /// <summary>特定できなかったときは既定の名前になること。</summary>
+    [Fact]
+    public void 特定できなければ既定の名前になる()
+        => Assert.Equal("cartridge.nes", FileNaming.MakeRomFileName("", ".nes"));
+}

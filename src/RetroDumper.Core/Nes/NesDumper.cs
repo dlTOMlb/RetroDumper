@@ -75,6 +75,7 @@ public sealed class NesDumper : ICartridgeDumper
             NesChrSize = chrSize,
         };
 
+        info.Details["PRG $8000 先頭 16 バイト"] = Convert.ToHexString(firstPrg.AsSpan(0, 16));
         info.Details["PRG 先頭 1KB SHA-1"] = firstSha1;
         info.Details["PRG 末尾 1KB SHA-1"] = lastSha1;
         info.Details["同定"] = known is not null
@@ -93,6 +94,17 @@ public sealed class NesDumper : ICartridgeDumper
                 : Range(mapper.ChrSizeRange);
         }
 
+        // 読み出しが成立しているかを先に見る。
+        // 全バイトが同じ値なら、バスからデータが返っていない。
+        // GBA で接触不良をソフトの問題と誤認して長時間を費やした経緯がある。
+        if (IsFlat(firstPrg) && IsFlat(lastPrg))
+            info.Warnings.Add(
+                $"PRG-ROM の読み出しが全バイト 0x{firstPrg[0]:X2} です。" +
+                "カートリッジがバスを駆動していません。" +
+                "まずカセットを挿し直してください。端子の清掃も試してください。" +
+                "アダプタは接触不良でも種別コードだけは正しく返すため、" +
+                "「認識しているのに読めない」ように見えます。");
+
         if (mapperNo < 0)
             info.Warnings.Add(
                 "マッパーが分かりません。ファミコンのカセットはマッパー番号を申告しないため、" +
@@ -106,6 +118,17 @@ public sealed class NesDumper : ICartridgeDumper
             info.Warnings.Add("PRG-ROM の容量が分かりません。手動で指定してください。");
 
         return info;
+    }
+
+    /// <summary>全バイトが同じ値か。読み出しが成立していないことの目印。</summary>
+    private static bool IsFlat(ReadOnlySpan<byte> data)
+    {
+        if (data.Length == 0) return true;
+
+        foreach (byte b in data)
+            if (b != data[0]) return false;
+
+        return true;
     }
 
     private static string Range((long Min, long Max) r)

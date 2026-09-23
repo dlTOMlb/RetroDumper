@@ -373,7 +373,12 @@ public partial class MainWindow : Window
 
     private void ShowCartridgeInfo(CartridgeInfo info)
     {
-        CartTitleText.Text = string.IsNullOrWhiteSpace(info.Title) ? "(タイトルなし)" : info.Title;
+        CartTitleText.Text = !string.IsNullOrWhiteSpace(info.Title)
+            ? info.Title
+            : info.Kind == CartridgeKind.Famicom
+                // ファミコンのカセットはタイトルを持たない。読み出しの失敗ではない。
+                ? "（ファミコンはタイトルを持ちません／吸い出し後に特定します）"
+                : "(タイトルなし)";
 
         CartSummaryText.Text =
             $"{info.Mapper}    ROM {FormatBytes(info.RomSize)}" +
@@ -391,17 +396,9 @@ public partial class MainWindow : Window
         if (_link is null || _info is null || _activeDumper is null) return;
         if (BuildOptions() is not DumpOptions options) return;
 
-        var save = new SaveFileDialog
-        {
-            Title = "ROM の保存先",
-            FileName = MakeFileName(_info),
-            Filter = $"ROM ファイル (*{_info.RomExtension})|*{_info.RomExtension}|すべてのファイル (*.*)|*.*",
-            AddExtension = true,
-            DefaultExt = _info.RomExtension,
-        };
-
-        if (save.ShowDialog(this) != true) return;
-
+        // 保存先は吸い出したあとに聞く。
+        // ファミコンのカセットはタイトルを持たないため、吸い出して
+        // No-Intro DAT と照合するまで正しい名前が分からない。
         _cts = new CancellationTokenSource();
         SetBusy(true);
         CancelButton.IsEnabled = true;
@@ -426,9 +423,36 @@ public partial class MainWindow : Window
             var result = await Task.Run(() =>
                 dumper.Dump(link, info, options, progress, _cts.Token));
 
+            Log($"CRC32: {result.Crc32:X8}");
+
+            if (result.ChecksumOk is bool ok)
+                Log($"チェックサム検証: {(ok ? "一致" : "不一致")} — {result.ChecksumDetail}");
+
+            // 照合してからファイル名を決める。
+            var identified = ReportNoIntroMatch(result.Rom, result.Crc32);
+
+            string suggested = identified is not null
+                ? FileNaming.MakeRomFileName(identified.GameName, info.RomExtension)
+                : MakeFileName(info);
+
+            var save = new SaveFileDialog
+            {
+                Title = "ROM の保存先",
+                FileName = suggested,
+                Filter = $"ROM ファイル (*{info.RomExtension})|*{info.RomExtension}|すべてのファイル (*.*)|*.*",
+                AddExtension = true,
+                DefaultExt = info.RomExtension,
+            };
+
+            if (save.ShowDialog(this) != true)
+            {
+                Log("保存を中止しました。吸い出した内容は破棄されます。");
+                ProgressText.Text = "保存せず終了";
+                return;
+            }
+
             await File.WriteAllBytesAsync(save.FileName, result.Rom);
             Log($"ROM を保存しました: {save.FileName} ({FormatBytes(result.Rom.LongLength)})");
-            Log($"CRC32: {result.Crc32:X8}");
 
             if (result.Save is { Length: > 0 })
             {
@@ -436,16 +460,6 @@ public partial class MainWindow : Window
                 await File.WriteAllBytesAsync(savePath, result.Save);
                 Log($"セーブデータを保存しました: {savePath} ({FormatBytes(result.Save.LongLength)})");
             }
-
-            if (result.ChecksumOk is bool ok)
-                Log($"チェックサム検証: {(ok ? "一致" : "不一致")} — {result.ChecksumDetail}");
-
-            var identified = ReportNoIntroMatch(result.Rom, result.Crc32);
-
-            // ファミコンのカセットはタイトルを持たないので、吸い出す前には
-            // 正しい名前が分からない。照合できた時点で改名を申し出る。
-            if (identified is not null)
-                OfferRename(save.FileName, identified, _info.RomExtension);
 
             ShowCartridgeInfo(result.Info);
 
@@ -556,45 +570,6 @@ public partial class MainWindow : Window
         return null;
     }
 
-    /// <summary>
-    /// No-Intro で特定できた名前へのリネームを申し出る。
-    ///
-    /// ファミコンのカセットはタイトルを持たないため、吸い出す前に
-    /// 正しい名前を知る方法がない。照合できてはじめて分かる。
-    /// 利用者が付けた名前を黙って変えるのは筋が悪いので、確認してから行う。
-    /// </summary>
-    private void OfferRename(string savedPath, NoIntroEntry entry, string extension)
-    {
-        string current = Path.GetFileName(savedPath);
-        string proposed = FileNaming.MakeRomFileName(entry.GameName, extension);
-
-        if (string.Equals(current, proposed, StringComparison.OrdinalIgnoreCase)) return;
-
-        string target = Path.Combine(Path.GetDirectoryName(savedPath) ?? ".", proposed);
-
-        if (File.Exists(target))
-        {
-            Log($"No-Intro の名前「{proposed}」は既に存在するため、改名しませんでした。");
-            return;
-        }
-
-        var answer = MessageBox.Show(this,
-            "No-Intro で特定できました。ファイル名を変更しますか？\n\n" +
-            $"現在: {current}\n変更後: {proposed}",
-            "ファイル名の変更", MessageBoxButton.YesNo, MessageBoxImage.Question);
-
-        if (answer != MessageBoxResult.Yes) return;
-
-        try
-        {
-            File.Move(savedPath, target);
-            Log($"ファイル名を変更しました: {proposed}");
-        }
-        catch (IOException ex)
-        {
-            Log($"ファイル名を変更できませんでした: {ex.Message}");
-        }
-    }
 
     private DumpOptions? BuildOptions()
     {
