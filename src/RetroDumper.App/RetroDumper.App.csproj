@@ -11,6 +11,22 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
+  <!--
+    配布は .NET の入っていない PC でもそのまま動く単一ファイルにする。
+
+    以前はこれをコマンド引数で渡していたため、引数を付け忘れた publish が
+    dist の単一ファイル EXE を通常構成で上書きしてしまった。
+    忘れようのない場所、つまりプロジェクトに書いておく。
+  -->
+  <PropertyGroup>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <SatelliteResourceLanguages>ja;en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\RetroDumper.Core\RetroDumper.Core.csproj" />
   </ItemGroup>

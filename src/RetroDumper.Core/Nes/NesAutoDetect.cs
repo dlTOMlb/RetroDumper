@@ -65,11 +65,11 @@ public sealed partial class NesDumper
                 continue;
             }
 
-            byte[] candidate;
+            byte[] prgData, chrData;
 
             try
             {
-                candidate = DumpWith(bus, mapper, prg, chr, progress, cancellationToken);
+                (prgData, chrData) = ReadParts(bus, mapper, prg, chr, progress, cancellationToken);
             }
             catch (RfcaException ex)
             {
@@ -77,25 +77,39 @@ public sealed partial class NesDumper
                 continue;
             }
 
-            // DAT は Headerless。iNES ヘッダ 16 バイトを外して照合する。
-            if (db.Match(candidate.AsSpan(16), candidate.Length - 16) is { } hit)
-            {
-                progress?.Report(new DumpProgress(
-                    $"{label} で確定: {hit.GameName}", candidate.Length, candidate.Length));
+            byte[]? asRead = null;
 
-                attempted.Add($"{label}: No-Intro と一致 → {hit.GameName}");
+            // 1 回の読み出しを、あり得る解釈それぞれで照合する。
+            // 照合は計算だけなので、解釈を増やしても通信時間は増えない。
+            foreach (var (p, c, how) in Interpretations(mapper, prgData, chrData))
+            {
+                var candidate = BuildINesFile(mapper.Number, p, c);
+
+                // 解釈を加えていない最初のものを、照合できなかったときの保存対象にする。
+                asRead ??= candidate;
+
+                // DAT は Headerless。iNES ヘッダ 16 バイトを外して照合する。
+                if (db.Match(candidate.AsSpan(16), candidate.Length - 16) is not { } hit) continue;
+
+                string detail = how.Length > 0 ? $"{label}（{how}）" : label;
+
+                progress?.Report(new DumpProgress(
+                    $"{detail} で確定: {hit.GameName}", candidate.Length, candidate.Length));
+
+                attempted.Add($"{detail}: No-Intro と一致 → {hit.GameName}");
 
                 return new AutoDetectResult(
-                    candidate, label, hit.GameName,
+                    candidate, detail, hit.GameName,
                     string.Join(Environment.NewLine, attempted.Select(a => "  " + a)));
             }
 
             attempted.Add(
-                $"{label}: PRG {prg / 1024}KB / CHR {chr / 1024}KB を吸い出したが DAT に一致せず");
+                $"{label}: PRG {prgData.Length / 1024}KB / CHR {chrData.Length / 1024}KB " +
+                "を吸い出したが、どの解釈でも DAT に一致せず");
 
-            if (plausible is null)
+            if (plausible is null && asRead is not null)
             {
-                plausible = candidate;
+                plausible = asRead;
                 plausibleMapper = label;
             }
         }
@@ -127,6 +141,10 @@ public sealed partial class NesDumper
     /// 同じならバンク切り替えが効いておらず、マッパーの選択が違う。
     /// 全部を吸い出す前にこれで落とせるので、総当たりが実用的な速さになる。
     /// バンクが 1 つしかない構成では判定できないので true を返す。
+    ///
+    /// 比較は**バンク全体**で行う。先頭 256 バイトだけを見ていたときは、
+    /// 埋め草で始まるバンク同士が一致してしまい、正しいマッパーを
+    /// 「切り替わらない」と誤って捨てていた。
     /// </summary>
     private static bool BanksDiffer(NesBus bus, NesMapper mapper, long prgSize)
     {
@@ -135,8 +153,8 @@ public sealed partial class NesDumper
 
         int banks = (int)(prgSize / bankSize);
 
-        byte[]? first = ReadProbe(bus, mapper, 0, bankSize, 256, isPrg: true);
-        byte[]? last = ReadProbe(bus, mapper, banks - 1, bankSize, 256, isPrg: true);
+        byte[]? first = ReadBank(bus, mapper, 0, bankSize, isPrg: true);
+        byte[]? last = ReadBank(bus, mapper, banks - 1, bankSize, isPrg: true);
 
         if (first is null || last is null) return false;
 
@@ -159,6 +177,21 @@ public sealed partial class NesDumper
         if (prgSize <= 0)
             throw new RfcaException("PRG-ROM の容量を判定できませんでした。手動で指定してください。");
 
+        var (prg, chr) = ReadParts(bus, mapper, prgSize, chrSize, progress, cancellationToken);
+
+        return BuildINesFile(mapper.Number, prg, chr);
+    }
+
+    /// <summary>
+    /// PRG と CHR を読み、繋げずにそのまま返す。
+    ///
+    /// 総当たりでは、同じ読み出し結果を複数の解釈で照合し直したい。
+    /// iNES ファイルに組み立ててしまうと分解できないので、部品のまま渡す。
+    /// </summary>
+    private static (byte[] Prg, byte[] Chr) ReadParts(
+        NesBus bus, NesMapper mapper, long prgSize, long chrSize,
+        IProgress<DumpProgress>? progress, CancellationToken cancellationToken)
+    {
         long total = prgSize + chrSize;
         long done = 0;
 
@@ -173,7 +206,57 @@ public sealed partial class NesDumper
                 bus, mapper, chrSize, mapper.ChrBankSize, isPrg: false,
                 progress, ref done, total, cancellationToken);
 
-        return BuildINesFile(mapper.Number, prg, chr);
+        return (prg, chr);
+    }
+
+    /// <summary>
+    /// 同じ読み出し結果を、あり得る複数の解釈で並べる。
+    ///
+    /// カセットは容量も構成も申告しないので、読めたバイト列が
+    /// そのまま正しい ROM 像とは限らない。よくある食い違いは 2 つ。
+    ///
+    ///   CHR-RAM のカセットから PPU バスを読むと、何らかの値は返るが
+    ///   それは ROM ではない。CHR 0KB として解釈し直す必要がある。
+    ///
+    ///   PRG が小さいカセットは上位アドレス線が繋がっておらず、
+    ///   同じ内容が折り返して二重に読める。半分に畳む必要がある。
+    ///
+    /// いずれも**読み直さずに**判定できる。照合は計算だけなので、
+    /// 解釈を増やしても通信時間は増えない。
+    /// 先頭が最もそのままの解釈で、後ろほど手を加えたものになる。
+    /// </summary>
+    private static IEnumerable<(byte[] Prg, byte[] Chr, string How)> Interpretations(
+        NesMapper mapper, byte[] prg, byte[] chr)
+    {
+        List<(byte[] Data, string How)> prgs = [(prg, "")];
+
+        var folded = prg;
+
+        while (folded.Length >= 2 * mapper.PrgBankSize
+            && folded.Length / 2 >= mapper.PrgSizeRange.Min)
+        {
+            int half = folded.Length / 2;
+
+            // 後半が前半の複製でなければ、畳むと別物になる。そこで止める。
+            if (!folded.AsSpan(0, half).SequenceEqual(folded.AsSpan(half))) break;
+
+            folded = folded[..half];
+            prgs.Add((folded, $"PRG を {half / 1024}KB と解釈（後半は前半の複製）"));
+        }
+
+        List<(byte[] Data, string How)> chrs = [(chr, "")];
+
+        if (chr.Length > 0 && mapper.ChrSizeRange.Min == 0)
+            chrs.Add(([], "CHR-RAM と解釈（CHR-ROM なし）"));
+
+        foreach (var p in prgs)
+            foreach (var c in chrs)
+            {
+                string how = string.Join(" / ",
+                    new[] { p.How, c.How }.Where(x => x.Length > 0));
+
+                yield return (p.Data, c.Data, how);
+            }
     }
 
     /// <summary>
@@ -191,7 +274,7 @@ public sealed partial class NesDumper
         var (min, max) = mapper.ChrSizeRange;
         if (mapper.ChrBankSize <= 0 || max <= 0) return 0;
 
-        byte[]? probe = ReadProbe(bus, mapper, 0, mapper.ChrBankSize, 256, isPrg: false);
+        byte[]? probe = ReadBank(bus, mapper, 0, mapper.ChrBankSize, isPrg: false);
 
         // 読めない、または全バイト同じ = CHR-ROM が載っていない。
         if (probe is null || IsFlat(probe))

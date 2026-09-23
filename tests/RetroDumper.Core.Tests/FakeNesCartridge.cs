@@ -27,6 +27,16 @@ public sealed class FakeNesCartridge : IRfcaLink
 
     public bool AllowWrites { get; set; }
 
+    /// <summary>
+    /// UxROM 相当のバンク切り替えを行うか。
+    ///
+    /// $8000-$BFFF はラッチで選んだバンク、$C000-$FFFF は最終バンク固定。
+    /// ラッチに載らない上位ビットは折り返す（実機と同じ）。
+    /// </summary>
+    public bool UxRomBanking { get; init; }
+
+    private int _latch;
+
     /// <summary>検証用: 内容を書き換えるライト。NROM では 1 件も起きてはいけない。</summary>
     public List<(uint Opcode, uint Address, byte[] Data)> Writes { get; } = [];
 
@@ -52,6 +62,8 @@ public sealed class FakeNesCartridge : IRfcaLink
             throw new RfcaWriteBlockedException($"0x{address:X4} はバンクレジスタではありません");
 
         BankRegisterWrites.Add((address, value));
+
+        if (UxRomBanking && address >= 0x8000) _latch = value;
     }
 
     public byte[] Read(uint opcode, uint address, int size, uint headerField = 0x08)
@@ -76,6 +88,21 @@ public sealed class FakeNesCartridge : IRfcaLink
         {
             // WRAM 領域。搭載していないので開放バス。
             destination.Fill(0xFF);
+            return;
+        }
+
+        if (UxRomBanking && _prg.Length > 0)
+        {
+            int banks = _prg.Length / 0x4000;
+
+            for (int i = 0; i < destination.Length; i++)
+            {
+                uint at = address + (uint)i;
+                int bank = at < 0xC000 ? _latch % banks : banks - 1;
+
+                destination[i] = _prg[bank * 0x4000 + (int)(at & 0x3FFF)];
+            }
+
             return;
         }
 

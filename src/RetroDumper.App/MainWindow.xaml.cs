@@ -435,20 +435,46 @@ public partial class MainWindow : Window
                 ? FileNaming.MakeRomFileName(identified.GameName, info.RomExtension)
                 : MakeFileName(info);
 
+            // ここが空になると保存ダイアログのファイル名欄が空で開く。
+            // 経路が増えたので、値をログに残して追えるようにしておく。
+            if (string.IsNullOrWhiteSpace(suggested))
+            {
+                Log($"警告: ファイル名を組み立てられませんでした" +
+                    $"（タイトル「{info.Title}」拡張子「{info.RomExtension}」）。既定の名前を使います。");
+
+                suggested = "cartridge" + (info.RomExtension is { Length: > 0 } ext ? ext : ".bin");
+            }
+
+            Log($"保存ダイアログの既定名: {suggested}");
+
             var save = new SaveFileDialog
             {
                 Title = "ROM の保存先",
                 FileName = suggested,
                 Filter = $"ROM ファイル (*{info.RomExtension})|*{info.RomExtension}|すべてのファイル (*.*)|*.*",
                 AddExtension = true,
-                DefaultExt = info.RomExtension,
+
+                // DefaultExt はピリオドを含めない形式。
+                // ".nes" のように渡すと拡張子の補完が正しく働かない。
+                DefaultExt = info.RomExtension.TrimStart('.'),
             };
 
-            if (save.ShowDialog(this) != true)
+            // 保存をやめると吸い出した内容は失われる。
+            // 時間をかけて読んだものなので、取り違えでないことを一度確かめる。
+            while (save.ShowDialog(this) != true)
             {
-                Log("保存を中止しました。吸い出した内容は破棄されます。");
-                ProgressText.Text = "保存せず終了";
-                return;
+                var discard = MessageBox.Show(this,
+                    "保存をやめると、吸い出した内容は破棄されます。\n" +
+                    "もう一度吸い出すには読み直しが必要です。\n\n" +
+                    "破棄してよろしいですか？",
+                    "保存の確認", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+                if (discard == MessageBoxResult.Yes)
+                {
+                    Log("保存を中止しました。吸い出した内容は破棄されます。");
+                    ProgressText.Text = "保存せず終了";
+                    return;
+                }
             }
 
             await File.WriteAllBytesAsync(save.FileName, result.Rom);

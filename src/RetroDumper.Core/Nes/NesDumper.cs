@@ -210,17 +210,15 @@ public sealed partial class NesDumper : ICartridgeDumper
         // 取りうる容量が 1 つしかないなら測る必要がない。
         if (min == max) return min;
 
-        const int probe = 256;                 // 比較に使う先頭バイト数
-
         int maxBanks = (int)(max / bankSize);
         if (maxBanks <= 0) return 0;
 
-        byte[]? first = ReadProbe(bus, mapper, 0, bankSize, probe, isPrg);
+        byte[]? first = ReadBank(bus, mapper, 0, bankSize, isPrg);
         if (first is null) return Math.Max(min, 0);
 
         for (int banks = 1; banks <= maxBanks; banks <<= 1)
         {
-            byte[]? at = ReadProbe(bus, mapper, banks, bankSize, probe, isPrg);
+            byte[]? at = ReadBank(bus, mapper, banks, bankSize, isPrg);
 
             // 読めない、または折り返してバンク 0 と同じ内容が見えたら、そこが終端。
             if (at is null || at.AsSpan().SequenceEqual(first))
@@ -240,16 +238,32 @@ public sealed partial class NesDumper : ICartridgeDumper
     private static long Clamp(long value, long min, long max)
         => value < min ? min : value > max ? max : value;
 
-    private static byte[]? ReadProbe(
-        NesBus bus, NesMapper mapper, int bank, int bankSize, int probe, bool isPrg)
+    /// <summary>
+    /// バンクを 1 つ読む。読めなければ null。
+    ///
+    /// **バンク全体を返すこと。**
+    /// 以前は先頭 256 バイトだけを切り出して比較に使っていたが、
+    /// ファミコンのバンクは先頭が 0xFF などの埋め草で始まるものが多く、
+    /// 中身の違うバンク同士が先頭だけ一致してしまう。
+    /// そのせいで「バンクが切り替わらない」「ここで折り返した」と誤判定していた。
+    /// 読み出し自体は元から全バンク分行っているので、
+    /// 比較を全体に広げても通信量は 1 バイトも増えない。
+    /// </summary>
+    private static byte[]? ReadBank(
+        NesBus bus, NesMapper mapper, int bank, int bankSize, bool isPrg)
     {
         try
         {
+            // totalBanks には実バンク数より大きい値を渡す。
+            // UxROM は「最終バンクは $C000 に固定」として切り替えを省くため、
+            // bank + 1 を渡すと**どのバンクを要求しても最終バンク扱い**になり、
+            // 常に同じ $C000 の内容が返ってしまう。
+            // それを「バンクが切り替わらない」と読み違えていた。
             byte[]? data = isPrg
-                ? mapper.ReadPrgBank(bus, bank, bankSize, bank + 1)
+                ? mapper.ReadPrgBank(bus, bank, bankSize, mapper.MaxPrgBanks + 1)
                 : mapper.ReadChrBank(bus, bank, bankSize);
 
-            return data is null || data.Length < probe ? null : data[..probe];
+            return data is null || data.Length < bankSize ? null : data;
         }
         catch (RfcaException)
         {
