@@ -84,31 +84,66 @@ public sealed class GbaSaveWriteTests
 
     /// <summary>
     /// 装置より小さいファイルは、その分だけ書く。残りは触らない。
-    ///
-    /// 参照実装 (RetroFreakDumper) も短いファイルを拒まず、
-    /// buf の長さだけを書いている。EEPROM は目印で容量が決まらないため、
-    /// 512B のセーブを 8KB と判定した装置へ書き戻す場面が実際に起きる。
+    /// 参照実装 (RetroFreakDumper) も短いファイルを拒まない。
     /// </summary>
     [Fact]
     public void 装置より小さければその分だけ書く()
     {
-        var cart = new FakeGbaSaveCartridge(8192) { AllowSaveWrites = true };
+        var cart = new FakeGbaSaveCartridge(32768) { AllowSaveWrites = true };
 
-        var before = new byte[8192];
+        var before = new byte[32768];
         Array.Fill(before, (byte)0xAB);
         cart.Preset(before);
 
-        var data = Pattern(512);
+        var data = Pattern(1024);
 
-        GbaSave.Write(cart, GbaSaveType.Eeprom64k, data);
+        GbaSave.Write(cart, GbaSaveType.Sram, data);
 
         var after = cart.Snapshot();
 
-        Assert.Equal(data, after[..512]);
+        Assert.Equal(data, after[..1024]);
 
         // 残りは触らないこと。
-        Assert.All(after[512..], b => Assert.Equal(0xAB, b));
+        Assert.All(after[1024..], b => Assert.Equal(0xAB, b));
     }
+
+    /// <summary>
+    /// **EEPROM だけは途中までの書き込みができない。**
+    ///
+    /// 容量によって通信のアドレス幅が変わるため、8KB の装置に
+    /// 512 バイトだけ書くという操作が成立しない。書きは 512 バイトのつもり、
+    /// 読み戻しは 8KB のつもり、と噛み合わなくなり照合が必ず失敗する
+    /// （2026-09-24 実機で発生）。中途半端に書く前に止めること。
+    /// </summary>
+    [Fact]
+    public void EEPROMは途中までの書き込みを拒む()
+    {
+        var cart = new FakeGbaSaveCartridge(8192) { AllowSaveWrites = true };
+        var before = cart.Snapshot();
+
+        var error = Assert.Throws<RfcaException>(
+            () => GbaSave.Write(cart, GbaSaveType.Eeprom64k, Pattern(512)));
+
+        Assert.Contains("途中までの書き込みができません", error.Message);
+        Assert.Equal(before, cart.Snapshot());
+    }
+
+    /// <summary>
+    /// ファイルの大きさに合う EEPROM の型へ読み替えられること。
+    /// 読み替えないまま書くと、書きと読み戻しでアドレス幅が食い違う。
+    /// </summary>
+    [Theory]
+    [InlineData(GbaSaveType.Eeprom64k, 512, GbaSaveType.Eeprom4k)]
+    [InlineData(GbaSaveType.Eeprom4k, 8192, GbaSaveType.Eeprom64k)]
+    [InlineData(GbaSaveType.Eeprom64k, 8192, GbaSaveType.Eeprom64k)]
+    public void ファイルの大きさに合うEEPROMへ読み替える(
+        GbaSaveType type, int length, GbaSaveType expected)
+        => Assert.Equal(expected, GbaSave.MatchEepromToSize(type, length));
+
+    /// <summary>EEPROM 以外は読み替えない。容量で通信は変わらない。</summary>
+    [Fact]
+    public void EEPROM以外は読み替えない()
+        => Assert.Equal(GbaSaveType.Sram, GbaSave.MatchEepromToSize(GbaSaveType.Sram, 512));
 
     [Fact]
     public void 種類が分からなければ何もしない()

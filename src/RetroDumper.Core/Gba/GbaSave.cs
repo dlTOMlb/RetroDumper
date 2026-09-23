@@ -199,6 +199,9 @@ public static class GbaSave
                 "セーブ装置の種類が分かりません。" +
                 "ROM に目印が無いため、種類を手で指定してください。");
 
+        // 参照実装はセーブの読み書きの前に必ずスロットを選び直す。
+        link.ReinitializeSlot();
+
         uint opcode = ReadOpcodeFor(type);
         var result = new byte[size];
         int block = ReadBlockSize(type);
@@ -241,9 +244,27 @@ public static class GbaSave
 
         // 装置より小さいファイルは、その分だけ書く。残りは触らない。
         // RetroFreakDumper も同じ扱いで、短いファイルを拒まない。
-        // EEPROM は目印で容量が決まらないため、512B のセーブを
-        // 8KB と判定した装置へ書き戻す場面が実際に起きる。
-        size = data.Length;
+        //
+        // ただし EEPROM は別。容量によって通信のアドレス幅が変わるため、
+        // 「8KB の装置に 512 バイトだけ書く」という操作は成立しない。
+        // 書きは 512 バイトのつもり、読み戻しは 8KB のつもり、と
+        // 噛み合わなくなり、照合が必ず失敗する（2026-09-24 実機）。
+        if (IsEeprom(type))
+        {
+            if (data.Length != size)
+                throw new RfcaException(
+                    $"EEPROM は容量ごとに通信の仕方が変わるため、" +
+                    $"途中までの書き込みができません。" +
+                    $"{DisplayName(type)} には {size} バイトちょうどが要りますが、" +
+                    $"{data.Length} バイト渡されました。");
+        }
+        else
+        {
+            size = data.Length;
+        }
+
+        // 参照実装はセーブの読み書きの前に必ずスロットを選び直す。
+        link.ReinitializeSlot();
 
         if (type is GbaSaveType.Flash512k or GbaSaveType.Flash1M)
             EnsureKnownFlash(link, type);
@@ -297,6 +318,26 @@ public static class GbaSave
             throw new RfcaException(
                 $"対応していないフラッシュです (ID 0x{id:X4})。" +
                 "書き込むと壊すおそれがあるため中止しました。吸い出しは行えます。");
+    }
+
+    /// <summary>EEPROM か。容量で通信の仕方が変わる唯一の装置。</summary>
+    public static bool IsEeprom(GbaSaveType type)
+        => type is GbaSaveType.Eeprom4k or GbaSaveType.Eeprom64k;
+
+    /// <summary>
+    /// 書き込むファイルの大きさに合う EEPROM の型へ読み替える。
+    ///
+    /// EEPROM は ROM の目印では容量が分からない。ファイルの大きさが
+    /// もう一方の容量にちょうど一致するなら、そちらが正しい可能性が高い。
+    /// 読み替えないまま書くと、書きと読み戻しでアドレス幅が食い違う。
+    /// </summary>
+    public static GbaSaveType MatchEepromToSize(GbaSaveType type, int length)
+    {
+        if (!IsEeprom(type) || length == SizeOf(type)) return type;
+
+        return AlternateEeprom(type) is GbaSaveType other && length == SizeOf(other)
+            ? other
+            : type;
     }
 
     private static uint ReadOpcodeFor(GbaSaveType type) => type switch

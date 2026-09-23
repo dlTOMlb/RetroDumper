@@ -58,6 +58,17 @@ public interface IRfcaLink
     int ReadGbaFlashId() => -1;
 
     /// <summary>
+    /// スロットを選び直す。
+    ///
+    /// RetroFreakDumper はセーブの読み書きを始める前に必ず
+    /// 0x04(0) → 0x05 → 200ms 待ち、を送っている（GbaDumper.Initialize）。
+    /// こちらは接続時に 1 度きりだった。セーブの書き込みが効かない件で
+    /// 見つかった差分なので、揃えておく。
+    /// シミュレータは実装しなくてよい。
+    /// </summary>
+    void ReinitializeSlot() { }
+
+    /// <summary>
     /// バンク切り替えレジスタへ 1 バイト書く。書き込み保護下でも通る。
     /// 対象は <see cref="MapperRegister.IsBankRegister"/> が認める範囲だけで、
     /// GBA は含まれない。

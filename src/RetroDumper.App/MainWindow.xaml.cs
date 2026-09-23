@@ -1229,6 +1229,9 @@ public partial class MainWindow : Window
             // EEPROM は目印で容量が決まらない。選ばれたファイルが
             // もう一方の容量に一致するなら、取り違えではなく容量の判定違いの
             // 可能性が高い。捨てずに、そちらとして書くかを尋ねる。
+            //
+            // **読み替えは必須。**EEPROM は容量で通信のアドレス幅が変わるため、
+            // 型と大きさが食い違ったまま書くと、書きと読み戻しが噛み合わない。
             if (data.Length != size
                 && _info.Kind == CartridgeKind.GameBoyAdvance
                 && GbaSave.AlternateEeprom(target.GbaType) is GbaSaveType alternate
@@ -1333,7 +1336,20 @@ public partial class MainWindow : Window
                 ProgressText.Text = $"{p.Stage}  {FormatBytes(p.BytesDone)} / {FormatBytes(p.BytesTotal)}";
             });
 
-            await Task.Run(() => WriteSaveCore(link, info, target, data, progress, token));
+            try
+            {
+                await Task.Run(() => WriteSaveCore(link, info, target, data, progress, token));
+            }
+            catch (RfcaException ex)
+            {
+                // 照合に失敗した時点で、カートリッジのセーブは中途半端になっている。
+                // 控えは取ってあるので、その場で戻せるようにする。
+                // 画面を閉じてから気付くのでは遅い。
+                Log($"セーブの書き込みに失敗しました: {ex.Message}");
+
+                await OfferRestoreAsync(link, info, target, backup, backupPath, progress, token);
+                return;
+            }
 
             Log("セーブを書き込み、読み戻して一致を確認しました。");
             ProgressText.Text = "セーブの書き込み完了";
@@ -1354,6 +1370,58 @@ public partial class MainWindow : Window
             _cts = null;
             CancelButton.IsEnabled = false;
             SetBusy(false);
+        }
+    }
+
+    /// <summary>
+    /// 書き込みに失敗したとき、控えを書き戻して元の状態に戻す。
+    ///
+    /// 照合に失敗した時点で、カートリッジのセーブは中途半端になっている。
+    /// 控えはファイルに残してあるが、画面を閉じてから気付くのでは遅い。
+    /// その場で戻せる道を用意しておく。
+    /// </summary>
+    private async Task OfferRestoreAsync(
+        IRfcaLink link, CartridgeInfo info, SaveTarget target,
+        byte[] backup, string backupPath,
+        IProgress<DumpProgress> progress, CancellationToken token)
+    {
+        var answer = MessageBox.Show(this,
+            "書き込みに失敗しました。\n" +
+            "カートリッジのセーブは中途半端な状態になっている可能性があります。\n\n" +
+            "書き込む前の控えを書き戻して、元の状態に戻しますか？\n\n" +
+            $"控え: {backupPath}\n" +
+            $"大きさ: {backup.Length} バイト",
+            "セーブの書き込み", MessageBoxButton.YesNo, MessageBoxImage.Error);
+
+        if (answer != MessageBoxResult.Yes)
+        {
+            Log($"控えは {backupPath} に残してあります。" +
+                "後から「セーブを書き込む」で選べば戻せます。");
+            ProgressText.Text = "書き込み失敗（控えは保存済み）";
+            return;
+        }
+
+        try
+        {
+            Log("控えを書き戻します。");
+
+            await Task.Run(() => WriteSaveCore(link, info, target, backup, progress, token));
+
+            Log("控えを書き戻し、元の状態に戻しました。");
+            ProgressText.Text = "元の状態に戻しました";
+        }
+        catch (Exception ex)
+        {
+            Log($"控えの書き戻しにも失敗しました: {ex.Message}");
+
+            MessageBox.Show(this,
+                "控えの書き戻しにも失敗しました。\n\n" +
+                $"控えは次の場所に残っています。\n{backupPath}\n\n" +
+                "カートリッジを挿し直してから、" +
+                "「セーブを書き込む」でこのファイルを選んでください。",
+                "セーブの書き込み", MessageBoxButton.OK, MessageBoxImage.Error);
+
+            ProgressText.Text = "書き込み失敗（控えは保存済み）";
         }
     }
 

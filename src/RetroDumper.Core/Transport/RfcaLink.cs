@@ -788,6 +788,14 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     public bool AllowSaveWrites { get; set; }
 
     /// <summary>
+    /// スロットを選び直す。セーブの読み書きの前に送る。
+    ///
+    /// 参照実装は毎回の読み書きの前に 0x04(0) → 0x05 → 200ms 待ちを送る。
+    /// こちらは接続時の 1 度きりだった。
+    /// </summary>
+    public void ReinitializeSlot() => EnsureAwake(force: true);
+
+    /// <summary>
     /// セーブ領域へ書く。
     ///
     /// 許可と宛先の両方を見る。どちらか一方でも欠けたら、
