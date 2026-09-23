@@ -1,3 +1,4 @@
+using RetroDumper.Core.Dumping;
 using RetroDumper.Core.Nes;
 using RetroDumper.Core.Transport;
 using Xunit;
@@ -137,5 +138,151 @@ public sealed class NesMapperRegistryTests
         var mmc3 = NesMapper.ForNumber(4)!;
         Assert.Equal(0x2000, mmc3.PrgBankSize);
         Assert.Equal(0x0400, mmc3.ChrBankSize);
+    }
+}
+
+/// <summary>
+/// ファミコンの容量判定と吸い出し。
+///
+/// カセットは容量を申告しないので、バンクの折り返しから実測するしかない。
+/// ROM に載っていないバンク番号は上位アドレス線が繋がっておらず、
+/// 番号が丸められて先頭のバンクと同じ内容が見える。
+/// </summary>
+public sealed class NesDumpTests
+{
+    /// <summary>
+    /// バンクごとに異なる内容の ROM。
+    ///
+    /// 単純な線形生成 (i * 17 + 3 など) は 256 バイト周期になるため、
+    /// 16KB 境界でバイト列が完全に一致してしまい、
+    /// 「折り返し」と「別のバンク」を区別できない。
+    /// バンク番号を混ぜて、バンクごとに必ず違う内容にする。
+    /// </summary>
+    private static byte[] Rom(int kb, int salt)
+    {
+        var rom = new byte[kb * 1024];
+
+        for (int i = 0; i < rom.Length; i++)
+        {
+            int bank = i >> 10;                       // 1KB ごとに変える
+            rom[i] = (byte)((bank * 131 + i * 17 + salt) & 0xFF);
+        }
+
+        return rom;
+    }
+
+    private static byte[] Prg(int kb) => Rom(kb, 3);
+
+    private static byte[] Chr(int kb) => Rom(kb, 11);
+
+    private static readonly DumpOptions Auto = new()
+    {
+        NesMapperOverride = 0,
+        IncludeSaveRam = false,
+        VerifyChecksum = false,
+    };
+
+    [Theory]
+    [InlineData(16)]
+    [InlineData(32)]
+    public void PRG容量を実測できる(int kb)
+    {
+        var cart = new FakeNesCartridge(Prg(kb), Chr(8)) { AllowWrites = false };
+        var dumper = new NesDumper();
+
+        var info = dumper.Identify(cart, Auto);
+        var result = dumper.Dump(cart, info, Auto, null, CancellationToken.None);
+
+        // iNES ヘッダの PRG 欄（16KB 単位）
+        Assert.Equal(kb / 16, result.Rom[4]);
+    }
+
+    [Fact]
+    public void CHR容量を実測できる()
+    {
+        var cart = new FakeNesCartridge(Prg(32), Chr(8)) { AllowWrites = false };
+        var dumper = new NesDumper();
+
+        var info = dumper.Identify(cart, Auto);
+        var result = dumper.Dump(cart, info, Auto, null, CancellationToken.None);
+
+        Assert.Equal(1, result.Rom[5]);   // 8KB / 8KB
+    }
+
+    [Fact]
+    public void 吸い出した内容がROMと一致する()
+    {
+        var prg = Prg(32);
+        var chr = Chr(8);
+        var cart = new FakeNesCartridge(prg, chr) { AllowWrites = false };
+        var dumper = new NesDumper();
+
+        var info = dumper.Identify(cart, Auto);
+        var result = dumper.Dump(cart, info, Auto, null, CancellationToken.None);
+
+        Assert.Equal(prg, result.Rom.AsSpan(16, prg.Length).ToArray());
+        Assert.Equal(chr, result.Rom.AsSpan(16 + prg.Length, chr.Length).ToArray());
+    }
+
+    /// <summary>NROM はバンク切り替えを必要としない。</summary>
+    [Fact]
+    public void NROMは書き込みを一切行わない()
+    {
+        var cart = new FakeNesCartridge(Prg(32), Chr(8)) { AllowWrites = false };
+        var dumper = new NesDumper();
+
+        var info = dumper.Identify(cart, Auto);
+        dumper.Dump(cart, info, Auto, null, CancellationToken.None);
+
+        Assert.Empty(cart.Writes);
+        Assert.Empty(cart.BankRegisterWrites);
+    }
+
+    /// <summary>手動指定は実測より優先されること。</summary>
+    [Fact]
+    public void 手動指定は実測より優先される()
+    {
+        var cart = new FakeNesCartridge(Prg(32), Chr(8)) { AllowWrites = false };
+        var dumper = new NesDumper();
+
+        var options = new DumpOptions
+        {
+            NesMapperOverride = 0,
+            NesPrgSize = 16 * 1024,
+            NesChrSize = 8 * 1024,
+            IncludeSaveRam = false,
+            VerifyChecksum = false,
+        };
+
+        var info = dumper.Identify(cart, options);
+        var result = dumper.Dump(cart, info, options, null, CancellationToken.None);
+
+        Assert.Equal(1, result.Rom[4]);   // 16KB
+    }
+
+    /// <summary>識別は PRG 先頭・末尾 1KB の SHA-1 を出すこと。同定の鍵になる。</summary>
+    [Fact]
+    public void 識別で同定用のSHA1が得られる()
+    {
+        var cart = new FakeNesCartridge(Prg(32), Chr(8));
+        var info = new NesDumper().Identify(cart, Auto);
+
+        Assert.Equal(40, info.Details["PRG 先頭 1KB SHA-1"].Length);
+        Assert.Equal(40, info.Details["PRG 末尾 1KB SHA-1"].Length);
+    }
+
+    /// <summary>マッパー未指定なら、その旨を警告すること。</summary>
+    [Fact]
+    public void マッパー未指定は警告される()
+    {
+        var cart = new FakeNesCartridge(Prg(32), Chr(8));
+
+        var info = new NesDumper().Identify(cart, new DumpOptions
+        {
+            IncludeSaveRam = false,
+            VerifyChecksum = false,
+        });
+
+        Assert.Contains(info.Warnings, w => w.Contains("マッパー"));
     }
 }

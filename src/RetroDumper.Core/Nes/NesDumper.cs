@@ -119,14 +119,20 @@ public sealed class NesDumper : ICartridgeDumper
                 $"マッパー {mapperNo} には未対応です。現在対応しているのは " +
                 string.Join(" / ", NesMapper.All.Select(m => $"{m.Number} ({m.Name})")) + " です。");
 
+        var bus = new NesBus(link);
+        mapper.Initialize(bus);
+
         long prgSize = options.NesPrgSize is > 0 ? options.NesPrgSize.Value : info.NesPrgSize;
         long chrSize = options.NesChrSize is > 0 ? options.NesChrSize.Value : info.NesChrSize;
 
-        if (prgSize <= 0)
-            throw new RfcaException("PRG-ROM の容量が指定されていません。");
+        // 指定が無ければ実測する。マッパーさえ決まれば容量は測れる。
+        if (prgSize <= 0) prgSize = DetectSize(bus, mapper, isPrg: true);
 
-        var bus = new NesBus(link);
-        mapper.Initialize(bus);
+        if (chrSize <= 0 && mapper.ChrBankSize > 0)
+            chrSize = DetectSize(bus, mapper, isPrg: false);
+
+        if (prgSize <= 0)
+            throw new RfcaException("PRG-ROM の容量を判定できませんでした。手動で指定してください。");
 
         long total = prgSize + chrSize;
         long done = 0;
@@ -154,6 +160,60 @@ public sealed class NesDumper : ICartridgeDumper
                 "ファミコンのカセットはチェックサムを持ちません。" +
                 "No-Intro DAT との照合で正否を確かめてください。",
         };
+    }
+
+    /// <summary>
+    /// バンクの折り返しから容量を実測する。
+    ///
+    /// ROM に載っていないバンク番号を指定すると、上位アドレス線が繋がっていない
+    /// ぶんだけ番号が丸められ、先頭のバンクと同じ内容が読める。
+    /// バンク 0 と一致する最小の 2 の冪が、そのまま総バンク数になる。
+    ///
+    /// ファミコンのカセットは容量を申告しないので、これが唯一の手段。
+    /// </summary>
+    private static long DetectSize(NesBus bus, NesMapper mapper, bool isPrg)
+    {
+        int bankSize = isPrg ? mapper.PrgBankSize : mapper.ChrBankSize;
+        if (bankSize <= 0) return 0;
+
+        const int probe = 256;                 // 比較に使う先頭バイト数
+
+        // マッパーがアドレスできる範囲までしか探さない。
+        // NROM のようにバンク切り替えを持たないものは 2 バンクが上限で、
+        // それを超えて探すと折り返しが見つからず容量を誤る。
+        int maxBanks = isPrg ? mapper.MaxPrgBanks : mapper.MaxChrBanks;
+        if (maxBanks <= 0) return 0;
+
+        byte[]? first = ReadProbe(bus, mapper, 0, bankSize, probe, isPrg);
+        if (first is null) return 0;
+
+        for (int banks = 1; banks <= maxBanks; banks <<= 1)
+        {
+            byte[]? at = ReadProbe(bus, mapper, banks, bankSize, probe, isPrg);
+            if (at is null) return (long)banks * bankSize;
+
+            // 折り返してバンク 0 と同じ内容が見えたら、そこが終端。
+            if (at.AsSpan().SequenceEqual(first)) return (long)banks * bankSize;
+        }
+
+        return (long)maxBanks * bankSize;
+    }
+
+    private static byte[]? ReadProbe(
+        NesBus bus, NesMapper mapper, int bank, int bankSize, int probe, bool isPrg)
+    {
+        try
+        {
+            byte[]? data = isPrg
+                ? mapper.ReadPrgBank(bus, bank, bankSize, bank + 1)
+                : mapper.ReadChrBank(bus, bank, bankSize);
+
+            return data is null || data.Length < probe ? null : data[..probe];
+        }
+        catch (RfcaException)
+        {
+            return null;
+        }
     }
 
     private static byte[] ReadBanks(

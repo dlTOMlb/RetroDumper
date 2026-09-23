@@ -440,7 +440,12 @@ public partial class MainWindow : Window
             if (result.ChecksumOk is bool ok)
                 Log($"チェックサム検証: {(ok ? "一致" : "不一致")} — {result.ChecksumDetail}");
 
-            ReportNoIntroMatch(result.Rom, result.Crc32);
+            var identified = ReportNoIntroMatch(result.Rom, result.Crc32);
+
+            // ファミコンのカセットはタイトルを持たないので、吸い出す前には
+            // 正しい名前が分からない。照合できた時点で改名を申し出る。
+            if (identified is not null)
+                OfferRename(save.FileName, identified, _info.RomExtension);
 
             ShowCartridgeInfo(result.Info);
 
@@ -504,14 +509,14 @@ public partial class MainWindow : Window
     /// 一致しないこと自体は失敗を意味しない（未収録・リビジョン違い・
     /// 容量判定のずれなど理由はいろいろある）。
     /// </summary>
-    private void ReportNoIntroMatch(byte[] rom, uint crc32)
+    private NoIntroEntry? ReportNoIntroMatch(byte[] rom, uint crc32)
     {
         var db = NoIntroDatabase.Load(log: null);
 
         if (db.IsEmpty)
         {
-            Log($"No-Intro DAT による照合は省略しました（{NoIntroDatabase.DefaultDirectory} に *.dat がありません）。");
-            return;
+            Log("No-Intro DAT が読み込めませんでした。照合を省略します。");
+            return null;
         }
 
         var match = db.Match(rom, rom.Length);
@@ -520,7 +525,7 @@ public partial class MainWindow : Window
         {
             Log($"No-Intro 一致: {match.GameName}");
             Log($"  {match.RomName} / {FormatBytes(match.Size)} / CRC32 {match.Crc32}");
-            return;
+            return match;
         }
 
         // ファミコンは iNES ヘッダ (16 バイト) を付けて出力している。
@@ -537,7 +542,7 @@ public partial class MainWindow : Window
                 Log($"No-Intro 一致 (Headerless): {body.GameName}");
                 Log($"  {body.RomName} / {FormatBytes(body.Size)} / CRC32 {body.Crc32}");
                 Log("  ROM 本体は正しく吸い出せています（iNES ヘッダは当アプリが付けたものです）。");
-                return;
+                return body;
             }
         }
 
@@ -547,6 +552,48 @@ public partial class MainWindow : Window
         var sameCrc = db.FindByCrc(crc32);
         if (sameCrc.Count > 0)
             Log($"  CRC32 は一致しますが MD5/SHA-1 が違います: {sameCrc[0].GameName}");
+
+        return null;
+    }
+
+    /// <summary>
+    /// No-Intro で特定できた名前へのリネームを申し出る。
+    ///
+    /// ファミコンのカセットはタイトルを持たないため、吸い出す前に
+    /// 正しい名前を知る方法がない。照合できてはじめて分かる。
+    /// 利用者が付けた名前を黙って変えるのは筋が悪いので、確認してから行う。
+    /// </summary>
+    private void OfferRename(string savedPath, NoIntroEntry entry, string extension)
+    {
+        string current = Path.GetFileName(savedPath);
+        string proposed = FileNaming.MakeRomFileName(entry.GameName, extension);
+
+        if (string.Equals(current, proposed, StringComparison.OrdinalIgnoreCase)) return;
+
+        string target = Path.Combine(Path.GetDirectoryName(savedPath) ?? ".", proposed);
+
+        if (File.Exists(target))
+        {
+            Log($"No-Intro の名前「{proposed}」は既に存在するため、改名しませんでした。");
+            return;
+        }
+
+        var answer = MessageBox.Show(this,
+            "No-Intro で特定できました。ファイル名を変更しますか？\n\n" +
+            $"現在: {current}\n変更後: {proposed}",
+            "ファイル名の変更", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+        if (answer != MessageBoxResult.Yes) return;
+
+        try
+        {
+            File.Move(savedPath, target);
+            Log($"ファイル名を変更しました: {proposed}");
+        }
+        catch (IOException ex)
+        {
+            Log($"ファイル名を変更できませんでした: {ex.Message}");
+        }
     }
 
     private DumpOptions? BuildOptions()
