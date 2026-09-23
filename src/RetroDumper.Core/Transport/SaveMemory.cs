@@ -64,11 +64,12 @@ public static class SaveMemory
             CartridgeKind.Famicom =>
                 opcode == RfcaOpcode.NesCpuWrite && address is >= 0x6000 and <= 0x7FFF,
 
-            // SFC の SRAM。LoROM はバンク $70 以降を丸ごと、
-            // HiROM はバンク $30-$3F の $6000-$7FFF を使う。opcode も別。
+            // SFC の SRAM。マッパーごとに窓も opcode も違う。
+            // SnesAddressMap.SramLayout の書き込み窓と対応させること。
+            // （対応は SnesSaveGateTests が確かめている）
             CartridgeKind.SuperFamicom =>
-                (opcode == RfcaOpcode.SnesWrite && IsLoRomSram(address))
-                || (opcode == RfcaOpcode.SnesExWrite && IsHiRomSram(address)),
+                (opcode == RfcaOpcode.SnesWrite && IsSnesSram(address))
+                || (opcode == RfcaOpcode.SnesExWrite && IsSnesExSram(address)),
 
             // GBA は専用 opcode 以外を認めない。番地で許すことはしない。
             CartridgeKind.GameBoyAdvance => false,
@@ -77,16 +78,40 @@ public static class SaveMemory
         };
     }
 
-    /// <summary>LoROM の SRAM。バンク $70-$7D（$7E-$7F は本体 WRAM なので除く）。</summary>
-    public static bool IsLoRomSram(uint address)
-        => address is >= 0x700000 and < 0x7E0000;
-
-    /// <summary>HiROM の SRAM。バンク $30-$3F の $6000-$7FFF。</summary>
-    public static bool IsHiRomSram(uint address)
+    /// <summary>
+    /// 通常の opcode (0x08) で書ける SRAM の窓。
+    ///
+    /// バンクはマッパーごとに違う。
+    ///   $F0-$FF  LoROM の書き込み窓
+    ///   $70-$7D  S-DD1 / スーパー FX（$7E-$7F は本体 WRAM なので除く）
+    ///   $40-$4F  SA-1 の BW-RAM
+    ///   $68-$6F  ST010/ST011
+    ///   $30-$3F の $6000-$7FFF  SPC7110
+    /// </summary>
+    public static bool IsSnesSram(uint address)
     {
         uint bank = address >> 16;
         uint offset = address & 0xFFFF;
 
+        if (bank >= 0xF0) return true;
+        if (bank is >= 0x70 and <= 0x7D) return true;
+        if (bank is >= 0x40 and <= 0x4F) return true;
+        if (bank is >= 0x68 and <= 0x6F) return true;
+
         return bank is >= 0x30 and <= 0x3F && offset is >= 0x6000 and <= 0x7FFF;
+    }
+
+    /// <summary>
+    /// 拡張 opcode (0x0A) で書ける SRAM の窓。
+    /// HiROM はバンク $30-$3F、ExHiROM は $B0-$BF の $6000-$7FFF。
+    /// </summary>
+    public static bool IsSnesExSram(uint address)
+    {
+        uint bank = address >> 16;
+        uint offset = address & 0xFFFF;
+
+        bool inBank = bank is >= 0x30 and <= 0x3F || bank is >= 0xB0 and <= 0xBF;
+
+        return inBank && offset is >= 0x6000 and <= 0x7FFF;
     }
 }

@@ -115,14 +115,16 @@ public sealed class SaveMemoryTests
             SaveMemory.IsSaveWrite(CartridgeKind.Famicom, RfcaOpcode.NesCpuWrite, address));
 
     /// <summary>
-    /// SFC は LoROM がバンク $70 以降、HiROM がバンク $30-$3F の $6000-$7FFF。
+    /// SFC の SRAM はマッパーごとに窓が違う。
+    /// LoROM の読みは $70 以降、S-DD1 / スーパー FX も同じ窓を使う。
     /// $7E-$7F は本体側の WRAM なので含めない。
+    /// $68-$6F は ST010/ST011 の窓なので通る（ここを境界に使わないこと）。
     /// </summary>
     [Theory]
     [InlineData(0x700000u, true)]
     [InlineData(0x7DFFFFu, true)]
     [InlineData(0x7E0000u, false)]
-    [InlineData(0x6FFFFFu, false)]
+    [InlineData(0x600000u, false)]
     public void SFCのLoROM_SRAM(uint address, bool expected)
         => Assert.Equal(expected,
             SaveMemory.IsSaveWrite(CartridgeKind.SuperFamicom, RfcaOpcode.SnesWrite, address));

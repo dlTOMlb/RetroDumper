@@ -1,3 +1,5 @@
+using RetroDumper.Core.Transport;
+
 namespace RetroDumper.Core.Snes;
 
 /// <summary>
@@ -98,31 +100,60 @@ public static class SnesAddressMap
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// セーブ RAM のアクセス方法。マッパーによってバンクも
-    /// 1 バンクあたりの有効バイト数も異なる。
+    /// セーブ RAM のアクセス方法。
+    ///
+    /// マッパーごとにバンクも 1 回あたりの転送量も、使う opcode も違う。
+    /// 値は RetroFreakDumper の Snes.SaveDataController 各実装に合わせた。
+    /// 推測で決めると、読めているように見えて別の場所を触ることになる。
+    ///
+    /// **LoROM は読みと書きでバンクが違う。**
+    /// 読みは $70 以降、書きは $F0 以降。参照実装がそうしている。
+    /// 同じ SRAM の別の見え方で、書き込みは上位側の窓を使う。
     /// </summary>
-    public readonly record struct SramWindow(uint FirstBank, uint OffsetInBank, int BytesPerBank);
+    public readonly record struct SramWindow(
+        uint ReadBank,
+        uint WriteBank,
+        uint OffsetInBank,
+        int BytesPerBank,
+        long MaxSize,
+        bool UseExOpcode)
+    {
+        public uint ReadOpcode => UseExOpcode ? RfcaOpcode.SnesExRead : RfcaOpcode.SnesRead;
+
+        public uint WriteOpcode => UseExOpcode ? RfcaOpcode.SnesExWrite : RfcaOpcode.SnesWrite;
+    }
 
     public static SramWindow? SramLayout(SnesMapper mapper) => mapper switch
     {
-        // LoROM: バンク $70-$7D の $0000-$7FFF。
-        SnesMapper.LoRom or SnesMapper.Sdd1 => new SramWindow(0x70, 0x0000, 0x8000),
+        // LoROM: 読みはバンク $70 以降、書きは $F0 以降。64KB ずつ。
+        SnesMapper.LoRom => new SramWindow(0x70, 0xF0, 0x0000, 0x10000, 0x20000, false),
 
-        // HiROM / ExHiROM: バンク $20-$3F の $6000-$7FFF（8KB 窓）。
-        SnesMapper.HiRom or SnesMapper.ExHiRom or SnesMapper.Spc7110
-            => new SramWindow(0x20, 0x6000, 0x2000),
+        // S-DD1 は読み書きとも $70 以降。
+        SnesMapper.Sdd1 => new SramWindow(0x70, 0x70, 0x0000, 0x10000, 0x20000, false),
 
-        // SA-1 の BW-RAM: バンク $40-$4F に 64KB 単位で連続して並ぶ。
-        SnesMapper.Sa1 => new SramWindow(0x40, 0x0000, 0x10000),
+        // HiROM: バンク $30 以降の $6000-$7FFF（8KB 窓）。拡張 opcode を使う。
+        SnesMapper.HiRom => new SramWindow(0x30, 0x30, 0x6000, 0x2000, 0x20000, true),
+
+        // ExHiROM: バンク $B0 以降の $6000-$7FFF。拡張 opcode。
+        SnesMapper.ExHiRom => new SramWindow(0xB0, 0xB0, 0x6000, 0x2000, 0x20000, true),
+
+        // SPC7110: 窓は HiROM と同じだが、**通常の opcode** を使う。
+        SnesMapper.Spc7110 => new SramWindow(0x30, 0x30, 0x6000, 0x2000, 0x20000, false),
+
+        // SA-1 の BW-RAM: バンク $40 以降に 64KB 単位で連続して並ぶ。最大 256KB。
+        SnesMapper.Sa1 => new SramWindow(0x40, 0x40, 0x0000, 0x10000, 0x40000, false),
 
         _ => null,
     };
 
     /// <summary>セーブ RAM のオフセット → バスアドレス。</summary>
-    public static uint SramBusAddress(SramWindow window, long offset)
+    public static uint SramBusAddress(SramWindow window, long offset, bool forWrite = false)
     {
-        long bank = window.FirstBank + offset / window.BytesPerBank;
+        uint firstBank = forWrite ? window.WriteBank : window.ReadBank;
+
+        long bank = firstBank + offset / window.BytesPerBank;
         long addr = window.OffsetInBank + offset % window.BytesPerBank;
+
         return (uint)((bank << 16) | addr);
     }
 }

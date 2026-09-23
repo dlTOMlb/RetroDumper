@@ -6,6 +6,7 @@ using System.Windows.Media;
 using Microsoft.Win32;
 using RetroDumper.Core.Database;
 using RetroDumper.Core.Dumping;
+using RetroDumper.Core.Gb;
 using RetroDumper.Core.Gba;
 using RetroDumper.Core.Nes;
 using RetroDumper.Core.Probe;
@@ -978,6 +979,117 @@ public partial class MainWindow : Window
         return detected;
     }
 
+    /// <summary>読み書きする対象。機種ごとの違いをここで吸収する。</summary>
+    private sealed record SaveTarget(string Label, long Size, GbaSaveType GbaType);
+
+    /// <summary>
+    /// 何をどれだけ読み書きするかを決める。
+    ///
+    /// GBA だけはセーブ装置の種類をヘッダで申告しないため、
+    /// ROM の中の目印から判定する。他の機種はヘッダから分かる。
+    /// </summary>
+    private async Task<SaveTarget?> ResolveSaveTargetAsync()
+    {
+        if (_info is null)
+        {
+            Log("先に「カセットを識別」を押してください。");
+            return null;
+        }
+
+        switch (_info.Kind)
+        {
+            case CartridgeKind.GameBoyAdvance:
+            {
+                var type = await ResolveGbaSaveTypeAsync();
+                if (type == GbaSaveType.None) return null;
+
+                return new SaveTarget(GbaSave.DisplayName(type), GbaSave.SizeOf(type), type);
+            }
+
+            case CartridgeKind.SuperFamicom:
+            {
+                if (_info.SnesMapping is null)
+                {
+                    Log("SFC のマッパーが分かりません。セーブを読み書きできません。");
+                    return null;
+                }
+
+                if (_info.SaveMemorySize <= 0)
+                {
+                    Log("このカートリッジにはセーブ RAM がありません。");
+                    return null;
+                }
+
+                return new SaveTarget(
+                    $"SFC セーブ RAM {_info.SaveMemorySize / 1024}KB",
+                    _info.SaveMemorySize, GbaSaveType.None);
+            }
+
+            case CartridgeKind.GameBoy:
+            {
+                if (_info.GbCartridgeType is null)
+                {
+                    Log("GB のカートリッジ種別が分かりません。セーブを読み書きできません。");
+                    return null;
+                }
+
+                if (_info.SaveMemorySize <= 0)
+                {
+                    Log("このカートリッジにはセーブ用の外部 RAM がありません。");
+                    return null;
+                }
+
+                return new SaveTarget(
+                    $"GB セーブ {_info.SaveMemorySize / 1024}KB ({_info.Mapper})",
+                    _info.SaveMemorySize, GbaSaveType.None);
+            }
+
+            default:
+                Log($"{_info.Kind.ToDisplayName()} のセーブ読み書きには対応していません。");
+                return null;
+        }
+    }
+
+    private byte[] ReadSaveCore(
+        IRfcaLink link, CartridgeInfo info, SaveTarget target,
+        IProgress<DumpProgress>? progress, CancellationToken token)
+        => info.Kind switch
+        {
+            CartridgeKind.GameBoyAdvance =>
+                GbaSave.Read(link, target.GbaType, progress, token),
+
+            CartridgeKind.SuperFamicom =>
+                SnesSave.Read(link, info.SnesMapping!.Value, target.Size, progress, token),
+
+            CartridgeKind.GameBoy =>
+                GbSave.Read(link, info.GbCartridgeType!.Value, target.Size, progress, token),
+
+            _ => throw new RfcaException("この機種のセーブ読み出しには対応していません。"),
+        };
+
+    private void WriteSaveCore(
+        IRfcaLink link, CartridgeInfo info, SaveTarget target, byte[] data,
+        IProgress<DumpProgress>? progress, CancellationToken token)
+    {
+        switch (info.Kind)
+        {
+            case CartridgeKind.GameBoyAdvance:
+                GbaSave.Write(link, target.GbaType, data, progress, token);
+                break;
+
+            case CartridgeKind.SuperFamicom:
+                SnesSave.Write(link, info.SnesMapping!.Value, data, progress, token);
+                break;
+
+            case CartridgeKind.GameBoy:
+                GbSave.Write(link, info.GbCartridgeType!.Value, data, progress, token);
+                break;
+
+            default:
+                throw new RfcaException("この機種のセーブ書き込みには対応していません。");
+        }
+    }
+
     private async void GbaSaveRead_Click(object sender, RoutedEventArgs e)
     {
         if (_link is null) return;
@@ -988,8 +1100,8 @@ public partial class MainWindow : Window
 
         try
         {
-            var type = await ResolveGbaSaveTypeAsync();
-            if (type == GbaSaveType.None) return;
+            var target = await ResolveSaveTargetAsync();
+            if (target is null || _info is null) return;
 
             var progress = new Progress<DumpProgress>(p =>
             {
@@ -998,11 +1110,12 @@ public partial class MainWindow : Window
             });
 
             var link = _link;
+            var info = _info;
             var token = _cts.Token;
 
-            Log($"セーブを吸い出します: {GbaSave.DisplayName(type)}");
+            Log($"セーブを吸い出します: {target.Label}");
 
-            byte[] save = await Task.Run(() => GbaSave.Read(link, type, progress, token));
+            byte[] save = await Task.Run(() => ReadSaveCore(link, info, target, progress, token));
 
             var dialog = new SaveFileDialog
             {
@@ -1059,10 +1172,10 @@ public partial class MainWindow : Window
 
         try
         {
-            var type = await ResolveGbaSaveTypeAsync();
-            if (type == GbaSaveType.None) return;
+            var target = await ResolveSaveTargetAsync();
+            if (target is null || _info is null) return;
 
-            int size = GbaSave.SizeOf(type);
+            long size = target.Size;
 
             var open = new OpenFileDialog
             {
@@ -1081,7 +1194,7 @@ public partial class MainWindow : Window
             if (data.Length != size)
             {
                 string message =
-                    $"ファイルの大きさが {GbaSave.DisplayName(type)} と合いません。\n\n" +
+                    $"ファイルの大きさが {target.Label} と合いません。\n\n" +
                     $"必要: {size} バイト\n選んだファイル: {data.Length} バイト";
 
                 Log(message.Replace("\n", " "));
@@ -1091,24 +1204,25 @@ public partial class MainWindow : Window
             }
 
             var link = _link;
+            var info = _info;
             var token = _cts.Token;
 
             // 上書きする前に、今カートリッジに入っているものを控えに残す。
             // 取り違えて書いたとき、元に戻せる手立てがこれしかない。
             Log("上書きする前に、現在のセーブを控えに残します。");
 
-            byte[] backup = await Task.Run(() => GbaSave.Read(link, type, null, token));
+            byte[] backup = await Task.Run(() => ReadSaveCore(link, info, target, null, token));
 
             string backupPath = Path.Combine(
                 Path.GetDirectoryName(Environment.ProcessPath) ?? Directory.GetCurrentDirectory(),
-                $"gba-save-backup-{DateTime.Now:yyyyMMdd-HHmmss}.sav");
+                $"save-backup-{DateTime.Now:yyyyMMdd-HHmmss}.sav");
 
             await File.WriteAllBytesAsync(backupPath, backup);
             Log($"控えを保存しました: {backupPath}");
 
             var confirm = MessageBox.Show(this,
                 "カートリッジのセーブデータを上書きします。\n\n" +
-                $"装置: {GbaSave.DisplayName(type)}\n" +
+                $"対象: {target.Label}\n" +
                 $"書き込むファイル: {Path.GetFileName(open.FileName)}\n" +
                 $"大きさ: {size} バイト\n\n" +
                 $"現在のセーブは次の場所に控えてあります。\n{backupPath}\n\n" +
@@ -1127,7 +1241,7 @@ public partial class MainWindow : Window
                 ProgressText.Text = $"{p.Stage}  {FormatBytes(p.BytesDone)} / {FormatBytes(p.BytesTotal)}";
             });
 
-            await Task.Run(() => GbaSave.Write(link, type, data, progress, token));
+            await Task.Run(() => WriteSaveCore(link, info, target, data, progress, token));
 
             Log("セーブを書き込み、読み戻して一致を確認しました。");
             ProgressText.Text = "セーブの書き込み完了";

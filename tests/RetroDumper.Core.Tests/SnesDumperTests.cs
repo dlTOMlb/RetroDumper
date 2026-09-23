@@ -1,3 +1,4 @@
+using RetroDumper.Core.Transport;
 using RetroDumper.Core.Dumping;
 using RetroDumper.Core.Snes;
 using Xunit;
@@ -233,20 +234,61 @@ public class SnesDumperTests
         // ここではアドレス計算だけを検証する。
         var layout = SnesAddressMap.SramLayout(SnesMapper.Sa1);
         Assert.NotNull(layout);
-        Assert.Equal(0x40u, layout!.Value.FirstBank);
+        Assert.Equal(0x40u, layout!.Value.ReadBank);
         Assert.Equal(0x400000u, SnesAddressMap.SramBusAddress(layout.Value, 0));
         Assert.Equal(0x410000u, SnesAddressMap.SramBusAddress(layout.Value, 0x10000));
     }
 
+    /// <summary>
+    /// HiROM の SRAM はバンク $30 以降の $6000-$7FFF。
+    ///
+    /// 以前は $20 以降としていたが、実機で確かめたものではなかった。
+    /// $20 も $30 も同じ SRAM の見え方だが、動作実績のある
+    /// RetroFreakDumper が $30 を使っているので、そちらに合わせる。
+    /// </summary>
     [Fact]
     public void SramLayout_HiRom_UsesEightKilobyteWindows()
     {
         var layout = SnesAddressMap.SramLayout(SnesMapper.HiRom)!.Value;
 
-        Assert.Equal(0x206000u, SnesAddressMap.SramBusAddress(layout, 0));
-        Assert.Equal(0x207FFFu, SnesAddressMap.SramBusAddress(layout, 0x1FFF));
+        Assert.Equal(0x306000u, SnesAddressMap.SramBusAddress(layout, 0));
+        Assert.Equal(0x307FFFu, SnesAddressMap.SramBusAddress(layout, 0x1FFF));
         // 8KB 窓を使い切ったら次のバンクへ。
-        Assert.Equal(0x216000u, SnesAddressMap.SramBusAddress(layout, 0x2000));
+        Assert.Equal(0x316000u, SnesAddressMap.SramBusAddress(layout, 0x2000));
+    }
+
+    /// <summary>
+    /// **LoROM は読みと書きでバンクが違う。**
+    ///
+    /// 読みは $70 以降、書きは $F0 以降。同じ SRAM の別の見え方で、
+    /// 参照実装はこの 2 つを使い分けている。
+    /// 書きにも $70 を使うと、書き込みが効かない可能性がある。
+    /// </summary>
+    [Fact]
+    public void SramLayout_LoRom_読みと書きでバンクが違う()
+    {
+        var layout = SnesAddressMap.SramLayout(SnesMapper.LoRom)!.Value;
+
+        Assert.Equal(0x700000u, SnesAddressMap.SramBusAddress(layout, 0));
+        Assert.Equal(0xF00000u, SnesAddressMap.SramBusAddress(layout, 0, forWrite: true));
+    }
+
+    /// <summary>
+    /// 拡張 opcode を使うのは HiROM と ExHiROM だけ。
+    /// SPC7110 は窓が HiROM と同じでも通常の opcode を使う。
+    /// </summary>
+    [Theory]
+    [InlineData(SnesMapper.HiRom, true)]
+    [InlineData(SnesMapper.ExHiRom, true)]
+    [InlineData(SnesMapper.Spc7110, false)]
+    [InlineData(SnesMapper.LoRom, false)]
+    [InlineData(SnesMapper.Sa1, false)]
+    public void SramLayout_使うopcodeがマッパーごとに決まる(SnesMapper mapper, bool useEx)
+    {
+        var layout = SnesAddressMap.SramLayout(mapper)!.Value;
+
+        Assert.Equal(useEx ? RfcaOpcode.SnesExRead : RfcaOpcode.SnesRead, layout.ReadOpcode);
+        Assert.Equal(useEx ? RfcaOpcode.SnesExWrite : RfcaOpcode.SnesWrite, layout.WriteOpcode);
     }
 
     // ==================================================================

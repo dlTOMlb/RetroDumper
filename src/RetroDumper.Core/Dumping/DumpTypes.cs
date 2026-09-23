@@ -100,6 +100,20 @@ public sealed class CartridgeInfo
     /// ファミコンだけは、吸い出しに必要な情報がカセットから読めない。
     /// 識別でデータベースから引いた値を、吸い出しへ引き継ぐために持つ。
     /// </summary>
+    /// <summary>
+    /// セーブ装置の容量。吸い出すかどうかに関わらず、分かる値を入れる。
+    ///
+    /// <see cref="SaveSize"/> は「今回の吸い出しに含めるか」に左右されるため、
+    /// セーブだけを読み書きする画面ではこちらを見る。
+    /// </summary>
+    public long SaveMemorySize { get; init; }
+
+    /// <summary>SFC のマッパー。セーブ RAM の窓を決めるのに要る。</summary>
+    public SnesMapper? SnesMapping { get; init; }
+
+    /// <summary>GB のカートリッジ種別（ヘッダ 0x147）。MBC の判別に要る。</summary>
+    public byte? GbCartridgeType { get; init; }
+
     public int? NesMapperNumber { get; init; }
 
     /// <summary>識別で確定した PRG-ROM 容量（バイト）。</summary>

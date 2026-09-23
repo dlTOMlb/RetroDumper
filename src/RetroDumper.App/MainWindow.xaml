@@ -108,11 +108,11 @@
                                 </StackPanel>
                             </GroupBox>
 
-                            <GroupBox Header="GBA セーブデータ">
+                            <GroupBox Header="セーブデータ">
                                 <StackPanel>
                                     <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,0,0,4"
-                                               Text="GBA はセーブ装置の種類をヘッダで申告しません。ROM の中に残る目印（SRAM_V / FLASH1M_V など）から判定します。「自動」は吸い出し済みの ROM を使い、無ければ ROM を読んでから判定します。" />
-                                    <Label Content="セーブ装置" />
+                                               Text="GBA・スーパーファミコン・ゲームボーイのセーブを読み書きします。GBA だけはセーブ装置の種類をヘッダで申告しないため、ROM の中に残る目印（SRAM_V / FLASH1M_V など）から判定します。他の機種はヘッダから分かるので、下の指定は使いません。" />
+                                    <Label Content="GBA のセーブ装置" />
                                     <ComboBox x:Name="GbaSaveTypeCombo" />
                                     <Button x:Name="GbaSaveReadButton" Content="セーブを吸い出す" Click="GbaSaveRead_Click"
                                             IsEnabled="False" Margin="0,6,0,0" FontWeight="Bold" />

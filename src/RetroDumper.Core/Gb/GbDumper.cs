@@ -57,6 +57,11 @@ public sealed class GbDumper : ICartridgeDumper
             Mapper = MbcName(cartType),
             RomExtension = cgb ? ".gbc" : ".gb",
             RawHeader = header,
+
+            // セーブだけを読み書きする画面のために、
+            // 今回の吸い出しに含めるかとは別に、分かる値を持たせる。
+            SaveMemorySize = RamSizeFromCode(ramSizeCode),
+            GbCartridgeType = cartType,
         };
 
         info.Details["CGB 対応"] = header[0x43] switch

@@ -51,6 +51,8 @@ public sealed class SnesDumper : ICartridgeDumper
             Title = best.Title,
             RomSize = clamped,
             SaveSize = saveSize,
+            SaveMemorySize = saveSize,
+            SnesMapping = best.Mapper,
             Mapper = DescribeMapper(mapper, best),
             RomExtension = ".sfc",
             RawHeader = best.Raw,
@@ -261,7 +263,7 @@ public sealed class SnesDumper : ICartridgeDumper
             ?? throw new RfcaException($"{mapper} のセーブ RAM 配置が未定義です。");
 
         return BulkReader.Read(
-            link, RfcaOpcode.SnesRead, saveSize,
+            link, layout.ReadOpcode, saveSize,
             offset => SnesAddressMap.SramBusAddress(layout, offset),
             options, "セーブ RAM 読み出し", progress, cancellationToken,
             maxChunkAlignment: layout.BytesPerBank);
