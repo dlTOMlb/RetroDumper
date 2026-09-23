@@ -431,6 +431,12 @@ public partial class MainWindow : Window
             // 照合してからファイル名を決める。
             var identified = ReportNoIntroMatch(result.Rom, result.Crc32);
 
+            // 照合できなかったときは、取りこぼさないよう控えを残す。
+            // 吸い出しには時間がかかるうえ、原因を調べるには現物が要る。
+            // 保存ダイアログでどう選ばれても、これは手元に残る。
+            if (identified is null && result.ChecksumOk == false)
+                SaveRecoveryCopy(result.Rom, info.RomExtension);
+
             string suggested = identified is not null
                 ? FileNaming.MakeRomFileName(identified.GameName, info.RomExtension)
                 : MakeFileName(info);
@@ -846,6 +852,35 @@ public partial class MainWindow : Window
         AutoDetectPortButton.IsEnabled = !busy && _link is null;
 
         Cursor = busy ? Cursors.Wait : null;
+    }
+
+    /// <summary>
+    /// 照合できなかった吸い出しの控えを、EXE と同じ場所に残す。
+    ///
+    /// 原因が読み違いなのか未収録なのかは、現物を見ないと分からない。
+    /// 保存ダイアログを閉じてしまうと調べる手立てが無くなるので、
+    /// 利用者の選択とは別に、解析用の 1 本を確保しておく。
+    /// </summary>
+    private void SaveRecoveryCopy(byte[] rom, string extension)
+    {
+        try
+        {
+            string dir = Path.GetDirectoryName(Environment.ProcessPath)
+                ?? Directory.GetCurrentDirectory();
+
+            string path = Path.Combine(
+                dir,
+                $"unmatched-{DateTime.Now:yyyyMMdd-HHmmss}" +
+                (extension is { Length: > 0 } ? extension : ".bin"));
+
+            File.WriteAllBytes(path, rom);
+
+            Log($"照合できなかったため、解析用の控えを保存しました: {path}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log($"解析用の控えを保存できませんでした: {ex.Message}");
+        }
     }
 
     private static string MakeFileName(CartridgeInfo info)

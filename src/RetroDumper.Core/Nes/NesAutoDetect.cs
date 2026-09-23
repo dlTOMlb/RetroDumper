@@ -131,7 +131,9 @@ public sealed partial class NesDumper
                 "照合できませんでした（データは保持しています）",
                 plausible.Length, plausible.Length));
 
-            return new AutoDetectResult(plausible, plausibleMapper, null, tried);
+            return new AutoDetectResult(
+                plausible, plausibleMapper, null,
+                tried + Environment.NewLine + Environment.NewLine + Diagnose(plausible));
         }
 
         throw new RfcaException(
@@ -287,5 +289,51 @@ public sealed partial class NesDumper
             return min == max ? min : 0;
 
         return DetectSize(bus, mapper, isPrg: false);
+    }
+
+    /// <summary>
+    /// 吸い出した内容そのものが妥当かを見る。
+    ///
+    /// DAT に一致しなかったとき、原因は「未収録」か「読み違い」しかない。
+    /// それを切り分けるのに、ファミコンには確実な手掛かりが一つある。
+    /// PRG の末尾 6 バイトは 6502 の割り込みベクタで、**必ず $8000 以上**を指す。
+    /// ここが壊れていれば、中身ではなく読み出しが失敗している。
+    /// </summary>
+    private static string Diagnose(byte[] ines)
+    {
+        int prgLength = ines[4] * 0x4000;
+        int chrLength = ines[5] * 0x2000;
+
+        var prg = ines.AsSpan(16, prgLength);
+        var chr = ines.AsSpan(16 + prgLength, chrLength);
+
+        var lines = new List<string>
+        {
+            $"PRG 先頭 16 バイト: {Convert.ToHexString(prg[..Math.Min(16, prg.Length)])}",
+            $"PRG 末尾 16 バイト: {Convert.ToHexString(prg[Math.Max(0, prg.Length - 16)..])}",
+        };
+
+        if (chrLength > 0)
+            lines.Add($"CHR 先頭 16 バイト: {Convert.ToHexString(chr[..Math.Min(16, chr.Length)])}");
+
+        if (prg.Length >= 6)
+        {
+            var v = prg[^6..];
+
+            ushort nmi = (ushort)(v[0] | (v[1] << 8));
+            ushort reset = (ushort)(v[2] | (v[3] << 8));
+            ushort irq = (ushort)(v[4] | (v[5] << 8));
+
+            bool sane = nmi >= 0x8000 && reset >= 0x8000 && irq >= 0x8000;
+
+            lines.Add($"割り込みベクタ: NMI ${nmi:X4} / RESET ${reset:X4} / IRQ ${irq:X4}");
+            lines.Add(sane
+                ? "→ ベクタは妥当です。PRG は正しく読めています。" +
+                  "一致しない原因は CHR か容量、または DAT 未収録です。"
+                : "→ ベクタが $8000 未満です。**PRG の読み出しが失敗しています。** " +
+                  "カセットを挿し直し、端子を清掃してから、もう一度お試しください。");
+        }
+
+        return string.Join(Environment.NewLine, lines.Select(l => "  " + l));
     }
 }
