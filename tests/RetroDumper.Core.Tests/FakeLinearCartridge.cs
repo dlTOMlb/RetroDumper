@@ -17,8 +17,17 @@ public sealed class FakeLinearCartridge : IRfcaLink
         /// <summary>アドレスが折り返して先頭から読める。</summary>
         Mirror,
 
-        /// <summary>A/D バスの残留値としてワードアドレスが読める（GBA）。</summary>
+        /// <summary>A/D バスの残留値としてワードアドレスが読める。</summary>
         OpenBus,
+
+        /// <summary>
+        /// 全バイト 0xFF が読める。
+        ///
+        /// 実測では GBA カセットの ROM 終端より先がこれになる
+        /// （Crash Bandicoot Advance: 実体 8MB、8MB〜16MB が 100% 0xFF）。
+        /// ミラーもワードアドレスも出ないので、容量判定はこれを見る必要がある。
+        /// </summary>
+        Blank,
 
         /// <summary>アダプタがエラーを返す。</summary>
         Error,
@@ -123,6 +132,10 @@ public sealed class FakeLinearCartridge : IRfcaLink
             else if (_beyond == BeyondEnd.Mirror)
             {
                 destination[i] = _rom[offset % _rom.Length];
+            }
+            else if (_beyond == BeyondEnd.Blank)
+            {
+                destination[i] = 0xFF;
             }
             else
             {

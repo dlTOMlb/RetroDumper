@@ -12,7 +12,6 @@ dist/
 *.gbc
 *.sfc
 *.smc
-*.md
 *.gen
 *.nes
 *.pce
@@ -21,6 +20,10 @@ dist/
 *.srm
 *.sav
 *.bin
+
+# メガドライブ ROM。*.md にすると README.md まで巻き込むので置き場所を限定する。
+tests/*.md
+dist/*.md
 
 # 実機診断の出力
 slot-comparison.txt

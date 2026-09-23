@@ -459,3 +459,112 @@ public class GbaFirstReadCorruptionTests
         Assert.Contains(info.Warnings, w => w.Contains("任天堂ロゴ"));
     }
 }
+
+/// <summary>
+/// GBA の容量判定。
+///
+/// 実機（Crash Bandicoot Advance / ACUJ）で確認した事実:
+///   ・実体 8MB。8MB〜16MB は 100% 0xFF。16MB 以降はオープンバスの繰り返し。
+///   ・ミラー（先頭への折り返し）は起きない。
+///   ・ワードアドレスの残留値も読めない。
+///
+/// 以前の実装はミラーとワードアドレス残留値だけを見ていたため、
+/// **どちらにも当たらず常に最大の 32MB を返していた**。
+/// 実際に 32MB のファイルが出力され、後半 24MB が無意味なデータだった。
+/// </summary>
+[Collection("GbaOpcodeState")]
+public class GbaSizeDetectionTests
+{
+    private static byte[] BuildRom(long size)
+    {
+        var rom = new byte[size];
+        for (long i = 0; i < size; i++) rom[i] = (byte)((i * 31 + 7) & 0xFF);
+
+        rom[0x03] = 0xEA;
+        Array.Clear(rom, 0x04, 0x9C);
+
+        int target = GbaDumper.NintendoLogoChecksum;
+        int p = 0x04;
+        while (target > 0 && p < 0xA0)
+        {
+            int put = Math.Min(255, target);
+            rom[p++] = (byte)put;
+            target -= put;
+        }
+
+        rom[0xB2] = 0x96;
+        return rom;
+    }
+
+    private static FakeLinearCartridge Cart(byte[] rom, FakeLinearCartridge.BeyondEnd beyond) =>
+        new(rom, RfcaOpcode.GbaRomRead, GbaDumper.DefaultRomBase, beyond,
+            CartridgeKind.GameBoyAdvance);
+
+    private static readonly DumpOptions Options = new()
+    {
+        IncludeSaveRam = false,
+        VerifyChecksum = false,
+    };
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    [InlineData(8)]
+    [InlineData(16)]
+    public void 終端より先が0xFFなら実体の容量を返す(int megabytes)
+    {
+        RfcaOpcode.GbaRead = RfcaOpcode.GbaRomRead;
+
+        long size = megabytes * 1024L * 1024L;
+        var cart = Cart(BuildRom(size), FakeLinearCartridge.BeyondEnd.Blank);
+
+        var info = new GbaDumper().Identify(cart, Options);
+
+        Assert.Equal(size, info.RomSize);
+    }
+
+    /// <summary>ミラーする機材でも従来どおり判定できること。</summary>
+    [Fact]
+    public void ミラーする場合も実体の容量を返す()
+    {
+        RfcaOpcode.GbaRead = RfcaOpcode.GbaRomRead;
+
+        long size = 4 * 1024 * 1024;
+        var cart = Cart(BuildRom(size), FakeLinearCartridge.BeyondEnd.Mirror);
+
+        Assert.Equal(size, new GbaDumper().Identify(cart, Options).RomSize);
+    }
+
+    /// <summary>
+    /// 32MB ちょうどのカセットは、終端の先が存在しないので最大容量のままでよい。
+    /// </summary>
+    [Fact]
+    public void 上限いっぱいのカセットは32MBを返す()
+    {
+        RfcaOpcode.GbaRead = RfcaOpcode.GbaRomRead;
+
+        long size = 32L * 1024 * 1024;
+        var cart = Cart(BuildRom(size), FakeLinearCartridge.BeyondEnd.Mirror);
+
+        Assert.Equal(size, new GbaDumper().Identify(cart, Options).RomSize);
+    }
+
+    /// <summary>手動指定は自動判定より優先されること。</summary>
+    [Fact]
+    public void 手動指定は自動判定より優先される()
+    {
+        RfcaOpcode.GbaRead = RfcaOpcode.GbaRomRead;
+
+        var cart = Cart(BuildRom(8 * 1024 * 1024), FakeLinearCartridge.BeyondEnd.Blank);
+
+        var info = new GbaDumper().Identify(cart, new DumpOptions
+        {
+            IncludeSaveRam = false,
+            VerifyChecksum = false,
+            RomSizeOverride = 4 * 1024 * 1024,
+        });
+
+        Assert.Equal(4 * 1024 * 1024, info.RomSize);
+    }
+}

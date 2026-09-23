@@ -117,8 +117,10 @@ public sealed class GbaDumper : ICartridgeDumper
 
         if (options.RomSizeOverride is null)
             info.Warnings.Add(
-                "GBA カセットは容量を申告するヘッダ欄を持ちません。ここでの判定はミラー検出による" +
-                "推定です。既知の容量と食い違う場合は手動指定してください。");
+                "GBA カセットは容量を申告するヘッダ欄を持ちません。ここでの判定は " +
+                "「ROM 終端より先が全バイト 0xFF になる」ことを利用した推定です。" +
+                "0xFF で埋めた領域を持つカセットでは小さく出ることがあります。" +
+                "既知の容量と食い違う場合は手動指定してください。");
 
         return info;
     }
@@ -226,8 +228,23 @@ public sealed class GbaDumper : ICartridgeDumper
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// ミラー検出とオープンバス検出で ROM 容量を求める。
-    /// どちらも当たらない場合は最大容量として扱う。
+    /// ROM 容量を求める。
+    ///
+    /// GBA のヘッダには容量を申告する欄がないので、終端を実測で探すしかない。
+    ///
+    /// 【実測で分かったこと】
+    /// 終端より先は **全バイト 0xFF** になる。
+    /// Crash Bandicoot Advance (ACUJ) で確認: 実体 8MB、8MB〜16MB が 100% 0xFF。
+    /// ミラー（先頭に折り返す）も、ワードアドレスの残留値も出なかった。
+    ///
+    /// 以前はミラーとワードアドレス残留値だけを見ていたため、
+    /// **どちらにも当たらず常に最大容量 32MB を返していた**。
+    /// 本家 RetroFreakDumper も 0xFF 埋めを終端判定に使っている
+    /// （AutoDump 内の CheckFill(0xFF, ...)）。
+    ///
+    /// 1 ブロックだけ見ると、たまたま 0xFF で埋まった領域を終端と誤判定しうる。
+    /// 候補サイズ N の先 [N, 2N) を等間隔に複数点サンプルし、
+    /// **すべて 0xFF のときだけ** 終端とみなす。
     /// </summary>
     private static long DetectRomSize(
         IRfcaLink link, uint opcode, uint romBase, byte[] header, DumpOptions options)
@@ -236,43 +253,85 @@ public sealed class GbaDumper : ICartridgeDumper
 
         foreach (long size in CandidateSizes)
         {
-            byte[] atSize;
-            try
-            {
-                atSize = link.Read(
-                    opcode, (uint)(romBase + size),
-                    RfcaOpcode.GbaBlockSize, RfcaOpcode.RequestHeaderField)[..0x40];
-            }
-            catch (RfcaException)
-            {
-                // その先が読めない ＝ そこが ROM の終端。
-                return size;
-            }
+            byte[]? atSize = TryProbe(link, opcode, romBase, size);
+
+            // その先が読めない ＝ そこが ROM の終端。
+            if (atSize is null) return size;
 
             // 折り返して先頭と同じ内容が出たら、そこが終端。
-            if (atSize.AsSpan().SequenceEqual(probe))
-                return size;
+            if (atSize.AsSpan(0, 0x40).SequenceEqual(probe)) return size;
 
-            // 何も刺さっていない領域は A/D バスの残留値（アドレス/2）を返す。
-            if (LooksLikeOpenBus(atSize, size))
-                return size;
+            // 何も刺さっていない領域は A/D バスの残留値（アドレス/2）を返す機材もある。
+            if (LooksLikeOpenBus(atSize, size)) return size;
+
+            // [N, 2N) が空（全バイト 0xFF）なら、そこが終端。
+            if (RangeIsBlank(link, opcode, romBase, size)) return size;
         }
 
         return CandidateSizes[^1];
     }
 
+    /// <summary>[size, size*2) を等間隔にサンプルし、すべて 0xFF かを見る。</summary>
+    private static bool RangeIsBlank(IRfcaLink link, uint opcode, uint romBase, long size)
+    {
+        const int samples = 8;
+
+        for (int i = 0; i < samples; i++)
+        {
+            long at = size + size / samples * i;
+
+            // 32MB を超える範囲は読めないので、そこまでで判断する。
+            if (at >= CandidateSizes[^1]) break;
+
+            byte[]? block = TryProbe(link, opcode, romBase, at);
+
+            // 読めない＝その先に何も無い。空と同じ扱いでよい。
+            if (block is null) continue;
+
+            if (!IsAllBlank(block)) return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsAllBlank(ReadOnlySpan<byte> data)
+    {
+        foreach (byte b in data)
+            if (b != 0xFF) return false;
+
+        return true;
+    }
+
+    /// <summary>指定アドレスを 1 ブロック読む。読めなければ null。</summary>
+    private static byte[]? TryProbe(IRfcaLink link, uint opcode, uint romBase, long offset)
+    {
+        try
+        {
+            return link.Read(
+                opcode, (uint)(romBase + offset),
+                RfcaOpcode.GbaBlockSize, RfcaOpcode.RequestHeaderField);
+        }
+        catch (RfcaException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>
-    /// GBA の ROM 終端より先は、16bit 単位で「ワードアドレスの下位 16bit」が読める。
-    /// この並びになっていればデータではなくオープンバス。
+    /// ROM 終端より先で、16bit 単位に「ワードアドレスの下位 16bit」が読める機材向け。
+    /// 手元のアダプタではこの並びにはならず、0xFF になる。
     /// </summary>
     private static bool LooksLikeOpenBus(ReadOnlySpan<byte> data, long offset)
     {
-        for (int i = 0; i + 1 < data.Length; i += 2)
+        int length = Math.Min(data.Length, 0x40);
+
+        for (int i = 0; i + 1 < length; i += 2)
         {
             ushort actual = (ushort)(data[i] | (data[i + 1] << 8));
             ushort expected = (ushort)(((offset + i) >> 1) & 0xFFFF);
             if (actual != expected) return false;
         }
+
         return true;
     }
 
