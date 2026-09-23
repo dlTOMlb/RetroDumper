@@ -489,6 +489,11 @@ public partial class MainWindow : Window
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => _cts?.Cancel();
 
+    /// <summary>先頭が "NES" なら iNES ヘッダ付き。</summary>
+    private static bool IsINesFile(byte[] rom)
+        => rom.Length > 16
+           && rom[0] == 'N' && rom[1] == 'E' && rom[2] == 'S' && rom[3] == 0x1A;
+
     /// <summary>
     /// 吸い出した ROM を No-Intro の DAT と照合する。
     ///
@@ -516,6 +521,24 @@ public partial class MainWindow : Window
             Log($"No-Intro 一致: {match.GameName}");
             Log($"  {match.RomName} / {FormatBytes(match.Size)} / CRC32 {match.Crc32}");
             return;
+        }
+
+        // ファミコンは iNES ヘッダ (16 バイト) を付けて出力している。
+        // No-Intro には Headered と Headerless の 2 種類があり、
+        // ヘッダのミラーリング指定などはカセットから読めず推測で埋めているため、
+        // Headered とは PRG/CHR が正しくても一致しないことがある。
+        // ROM 本体だけを Headerless の DAT と照合する。
+        if (IsINesFile(rom))
+        {
+            var body = db.Match(rom.AsSpan(16), rom.Length - 16);
+
+            if (body is not null)
+            {
+                Log($"No-Intro 一致 (Headerless): {body.GameName}");
+                Log($"  {body.RomName} / {FormatBytes(body.Size)} / CRC32 {body.Crc32}");
+                Log("  ROM 本体は正しく吸い出せています（iNES ヘッダは当アプリが付けたものです）。");
+                return;
+            }
         }
 
         Log($"No-Intro 照合: 一致なし（CRC32 {crc32:X8} / {db.EntryCount} 件と比較）。");

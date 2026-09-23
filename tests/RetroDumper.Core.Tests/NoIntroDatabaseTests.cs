@@ -159,3 +159,86 @@ public sealed class NoIntroDatabaseTests : IDisposable
         Assert.Equal("Minimal", db.Match(rom, rom.Length)?.GameName);
     }
 }
+
+/// <summary>
+/// ファミコンの照合は iNES ヘッダを外して行う必要がある。
+///
+/// No-Intro には Headered と Headerless の 2 種類がある。
+/// 当アプリが付ける iNES ヘッダはミラーリングの向きなどを推測で埋めており、
+/// カセットからは読めない。そのため Headered の DAT とは
+/// PRG/CHR が完全に正しくても一致しないことがある。
+/// Headerless なら ROM 本体だけを比較するので、吸い出しの正否を判定できる。
+/// </summary>
+public sealed class NesHeaderlessMatchTests : IDisposable
+{
+    private readonly string _dir;
+
+    public NesHeaderlessMatchTests()
+    {
+        _dir = Path.Combine(Path.GetTempPath(), "rdnes-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_dir);
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
+    }
+
+    private static byte[] RomBody()
+    {
+        var body = new byte[0x8000];
+        for (int i = 0; i < body.Length; i++) body[i] = (byte)((i * 13 + 5) & 0xFF);
+        return body;
+    }
+
+    private void WriteHeaderlessDat(byte[] body)
+    {
+        string crc = RetroDumper.Core.Util.Checksums.Crc32(body).ToString("X8");
+        string md5 = Convert.ToHexString(System.Security.Cryptography.MD5.HashData(body));
+        string sha1 = Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(body));
+
+        File.WriteAllText(Path.Combine(_dir, "nes.dat"),
+            $"""
+             <?xml version="1.0"?>
+             <datafile>
+               <game name="Test NES Game (Japan)">
+                 <rom name="Test NES Game (Japan).nes" size="{body.Length}" crc="{crc}" md5="{md5}" sha1="{sha1}"/>
+               </game>
+             </datafile>
+             """);
+    }
+
+    [Fact]
+    public void ヘッダを外せばHeaderlessのDATと一致する()
+    {
+        var body = RomBody();
+        WriteHeaderlessDat(body);
+
+        var file = RetroDumper.Core.Nes.NesDumper.BuildINesFile(0, body, []);
+        var db = NoIntroDatabase.Load(_dir);
+
+        // ファイル全体では一致しない（ヘッダ 16 バイトが余分）。
+        Assert.Null(db.Match(file, file.Length));
+
+        // ヘッダを外せば一致する。
+        var match = db.Match(file.AsSpan(16), file.Length - 16);
+        Assert.NotNull(match);
+        Assert.Equal("Test NES Game (Japan)", match.GameName);
+    }
+
+    /// <summary>ヘッダの内容が違っても、ROM 本体が同じなら一致すること。</summary>
+    [Fact]
+    public void ヘッダのマッパー指定が違っても本体が同じなら一致する()
+    {
+        var body = RomBody();
+        WriteHeaderlessDat(body);
+
+        var db = NoIntroDatabase.Load(_dir);
+
+        foreach (int mapper in new[] { 0, 1, 4, 66 })
+        {
+            var file = RetroDumper.Core.Nes.NesDumper.BuildINesFile(mapper, body, []);
+            Assert.NotNull(db.Match(file.AsSpan(16), file.Length - 16));
+        }
+    }
+}
