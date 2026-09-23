@@ -103,9 +103,15 @@ public sealed partial class NesDumper
                     string.Join(Environment.NewLine, attempted.Select(a => "  " + a)));
             }
 
+            // 外れた原因が「未収録」なのか「容量の読み違い」なのかを分ける。
+            int sameSize = db.CountWithSize(prgData.Length + chrData.Length);
+
             attempted.Add(
                 $"{label}: PRG {prgData.Length / 1024}KB / CHR {chrData.Length / 1024}KB " +
-                "を吸い出したが、どの解釈でも DAT に一致せず");
+                "を吸い出したが、どの切り方でも DAT に一致せず" +
+                (sameSize == 0
+                    ? "（この容量のソフトは DAT に 1 本も無い。容量の判定が違う）"
+                    : $"（この容量のソフトは DAT に {sameSize} 本ある。中身が違う）"));
 
             if (plausible is null && asRead is not null)
             {
@@ -210,52 +216,52 @@ public sealed partial class NesDumper
     }
 
     /// <summary>
-    /// 同じ読み出し結果を、あり得る複数の解釈で並べる。
+    /// 同じ読み出し結果を、あり得る容量の組み合わせで並べる。
     ///
-    /// カセットは容量も構成も申告しないので、読めたバイト列が
-    /// そのまま正しい ROM 像とは限らない。よくある食い違いは 2 つ。
+    /// **容量はこちらで決めず、DAT に決めさせる。**
+    /// カセットは容量を申告しないので、こちらの実測は当たり外れがある。
+    /// 一方 DAT は「その容量・その中身のソフトが実在するか」を確実に答えられる。
+    /// ならば、読めたバイト列を切り方を変えて何通りも差し出し、
+    /// DAT が受け取ったものを正解とするのが筋が通る。
     ///
-    ///   CHR-RAM のカセットから PPU バスを読むと、何らかの値は返るが
-    ///   それは ROM ではない。CHR 0KB として解釈し直す必要がある。
+    /// 切り方は PRG・CHR とも 2 の冪。実機の容量は必ず 2 の冪で、
+    /// 読みすぎた分は折り返しか開放バスなので、前から切れば正しい像になる。
+    /// CHR は 0（CHR-RAM）も候補に入れる。CHR-RAM のカセットからも
+    /// PPU バスは何かを返すため、それを CHR-ROM と取り違えうる。
     ///
-    ///   PRG が小さいカセットは上位アドレス線が繋がっておらず、
-    ///   同じ内容が折り返して二重に読める。半分に畳む必要がある。
-    ///
-    /// いずれも**読み直さずに**判定できる。照合は計算だけなので、
-    /// 解釈を増やしても通信時間は増えない。
-    /// 先頭が最もそのままの解釈で、後ろほど手を加えたものになる。
+    /// 誤って一致することは考えなくてよい。照合は CRC32 に加えて
+    /// MD5 と SHA-1 まで見るので、違う中身が通り抜けることはない。
+    /// 照合は計算だけなので、候補を増やしても通信時間は増えない。
+    /// 先頭が実測どおりの解釈で、後ろほど小さく切ったものになる。
     /// </summary>
     private static IEnumerable<(byte[] Prg, byte[] Chr, string How)> Interpretations(
         NesMapper mapper, byte[] prg, byte[] chr)
     {
-        List<(byte[] Data, string How)> prgs = [(prg, "")];
+        List<int> prgLengths = [prg.Length];
 
-        var folded = prg;
+        for (int len = prg.Length / 2;
+             len >= mapper.PrgSizeRange.Min && len >= mapper.PrgBankSize;
+             len /= 2)
+            prgLengths.Add(len);
 
-        while (folded.Length >= 2 * mapper.PrgBankSize
-            && folded.Length / 2 >= mapper.PrgSizeRange.Min)
-        {
-            int half = folded.Length / 2;
+        List<int> chrLengths = [chr.Length];
 
-            // 後半が前半の複製でなければ、畳むと別物になる。そこで止める。
-            if (!folded.AsSpan(0, half).SequenceEqual(folded.AsSpan(half))) break;
+        for (int len = chr.Length / 2; len >= 0x2000; len /= 2)
+            chrLengths.Add(len);
 
-            folded = folded[..half];
-            prgs.Add((folded, $"PRG を {half / 1024}KB と解釈（後半は前半の複製）"));
-        }
+        if (chr.Length > 0) chrLengths.Add(0);
 
-        List<(byte[] Data, string How)> chrs = [(chr, "")];
-
-        if (chr.Length > 0 && mapper.ChrSizeRange.Min == 0)
-            chrs.Add(([], "CHR-RAM と解釈（CHR-ROM なし）"));
-
-        foreach (var p in prgs)
-            foreach (var c in chrs)
+        foreach (int p in prgLengths)
+            foreach (int c in chrLengths)
             {
-                string how = string.Join(" / ",
-                    new[] { p.How, c.How }.Where(x => x.Length > 0));
+                string how = p == prg.Length && c == chr.Length
+                    ? ""
+                    : $"PRG {p / 1024}KB / " + (c == 0 ? "CHR-RAM" : $"CHR {c / 1024}KB");
 
-                yield return (p.Data, c.Data, how);
+                yield return (
+                    p == prg.Length ? prg : prg[..p],
+                    c == chr.Length ? chr : chr[..c],
+                    how);
             }
     }
 

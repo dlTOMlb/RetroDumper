@@ -32,6 +32,9 @@ public sealed class NoIntroDatabase
     /// <summary>CRC32（大文字 8 桁）→ 該当エントリ。</summary>
     private readonly Dictionary<string, List<NoIntroEntry>> _byCrc = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>容量ごとの収録件数。照合が外れた原因を切り分けるために持つ。</summary>
+    private readonly Dictionary<long, int> _bySize = [];
+
     /// <summary>読み込んだ DAT ファイル名。</summary>
     public List<string> LoadedFiles { get; } = [];
 
@@ -175,6 +178,10 @@ public sealed class NoIntroDatabase
                     _byCrc[entry.Crc32] = list = [];
 
                 list.Add(entry);
+
+                if (entry.Size > 0)
+                    _bySize[entry.Size] = _bySize.GetValueOrDefault(entry.Size) + 1;
+
                 added++;
                 EntryCount++;
             }
@@ -182,6 +189,15 @@ public sealed class NoIntroDatabase
 
         return added;
     }
+
+    /// <summary>
+    /// その容量で収録されているソフトの件数。
+    ///
+    /// 照合が外れたとき、原因が「未収録」なのか「容量の読み違い」なのかを
+    /// 分けるために使う。0 件なら、その容量のソフトは 1 本も存在しないので、
+    /// 吸い出した中身ではなく容量の判定を疑うべきだと分かる。
+    /// </summary>
+    public int CountWithSize(long size) => _bySize.GetValueOrDefault(size);
 
     /// <summary>CRC32 で引く。見つからなければ空。</summary>
     public IReadOnlyList<NoIntroEntry> FindByCrc(uint crc32)

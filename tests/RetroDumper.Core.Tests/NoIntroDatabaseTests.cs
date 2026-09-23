@@ -56,6 +56,25 @@ public sealed class NoIntroDatabaseTests : IDisposable
         return path;
     }
 
+    /// <summary>
+    /// 容量ごとの収録件数を引けること。
+    ///
+    /// 照合が外れたとき、原因が「DAT に未収録」なのか
+    /// 「こちらの容量判定が違う」のかを分けるために使う。
+    /// その容量のソフトが 1 本も無いなら、中身ではなく容量を疑えばよい。
+    /// </summary>
+    [Fact]
+    public void 容量ごとの収録件数を引ける()
+    {
+        var rom = SampleRom();
+        WriteDat(rom);
+
+        var db = NoIntroDatabase.Load(_dir, null, includeEmbedded: false);
+
+        Assert.Equal(1, db.CountWithSize(rom.Length));
+        Assert.Equal(0, db.CountWithSize(rom.Length + 1));
+    }
+
     [Fact]
     public void DATが無くても空で返り例外にならない()
     {
