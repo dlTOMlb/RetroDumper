@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>rfcalab</AssemblyName>
+    <RootNamespace>RetroDumper.Lab</RootNamespace>
+
+    <!-- 単一ファイル配布は要らない。手元で実験するためだけのもの。 -->
+    <SelfContained>false</SelfContained>
+    <PublishSingleFile>false</PublishSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\RetroDumper.Core\RetroDumper.Core.csproj" />
+  </ItemGroup>
+
+</Project>

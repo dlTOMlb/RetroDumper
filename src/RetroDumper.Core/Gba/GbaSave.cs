@@ -292,22 +292,29 @@ public static class GbaSave
         if (type is GbaSaveType.Flash512k or GbaSaveType.Flash1M)
             EnsureKnownFlash(link, type);
 
-        uint opcode = WriteOpcodeFor(type);
-        int block = WriteBlockSize(type);
-        int done = 0;
-
-        while (done < size)
+        if (type == GbaSaveType.Eeprom4k)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            WriteEeprom4k(link, data, progress, cancellationToken);
+        }
+        else
+        {
+            uint opcode = WriteOpcodeFor(type);
+            int block = WriteBlockSize(type);
+            int done = 0;
 
-            int length = Math.Min(block, size - done);
+            while (done < size)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
 
-            link.WriteSaveMemory(
-                CartridgeKind.GameBoyAdvance, opcode, (uint)done,
-                data.AsSpan(done, length));
+                int length = Math.Min(block, size - done);
 
-            done += length;
-            progress?.Report(new DumpProgress($"セーブ書き込み ({DisplayName(type)})", done, size));
+                link.WriteSaveMemory(
+                    CartridgeKind.GameBoyAdvance, opcode, (uint)done,
+                    data.AsSpan(done, length));
+
+                done += length;
+                progress?.Report(new DumpProgress($"セーブ書き込み ({DisplayName(type)})", done, size));
+            }
         }
 
         progress?.Report(new DumpProgress("書き込んだ内容を照合中", 0, size));
@@ -392,6 +399,61 @@ public static class GbaSave
             throw new RfcaException(
                 $"対応していないフラッシュです (ID 0x{id:X4})。" +
                 "書き込むと壊すおそれがあるため中止しました。吸い出しは行えます。");
+    }
+
+    /// <summary>EEPROM の 1 ブロック。GBA の EEPROM は 64 ビット単位で読み書きする。</summary>
+    private const int EepromBlockSize = 8;
+
+    /// <summary>
+    /// 4kbit の EEPROM へ書く。**アダプタの癖を逆手に取る。**
+    ///
+    /// 2026-09-24、実機で次のことが分かった。
+    /// アダプタは EEPROM の書き込みで、**常に 64kbit 用の
+    /// 14 ビットアドレス**を送っている。4kbit の石はアドレスを
+    /// 6 ビットしか見ないため、こうなる。
+    ///
+    ///   ・上位 6 ビットだけがブロック番号として使われる
+    ///   ・余った下位 8 ビットが、データの 1 バイト目として取り込まれる
+    ///   ・本体のデータは 1 バイト分押し出され、最後の 1 バイトが落ちる
+    ///
+    /// そのまま送ると、どのブロックを指定してもブロック 0 にしか書けない
+    /// （ブロック番号 n の 14 ビット値は n で、上位 6 ビットは常に 0 のため）。
+    /// 実際、64 ブロックを書くと最後の 1 つだけがブロック 0 に残った。
+    ///
+    /// ならばアドレス欄をこう組み立てればよい。
+    ///
+    ///   上位 6 ビット = 書きたいブロック番号
+    ///   下位 8 ビット = 書きたい 1 バイト目
+    ///
+    /// 本体には 2 バイト目以降の 7 バイトだけを渡す。
+    /// 実機で全ブロックに狙いどおり書けることを確認済み。
+    ///
+    /// 64kbit の石ではアダプタのアドレス幅と石が一致するので、
+    /// この細工は要らない。そちらは素直に書く。
+    /// </summary>
+    private static void WriteEeprom4k(
+        IRfcaLink link, byte[] data,
+        IProgress<DumpProgress>? progress, CancellationToken cancellationToken)
+    {
+        int blocks = data.Length / EepromBlockSize;
+
+        for (int block = 0; block < blocks; block++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var content = data.AsSpan(block * EepromBlockSize, EepromBlockSize);
+
+            // 14 ビットのアドレス欄に、ブロック番号と 1 バイト目を詰める。
+            uint field = ((uint)block << 8) | content[0];
+
+            link.WriteSaveMemory(
+                CartridgeKind.GameBoyAdvance, RfcaOpcode.GbaEepromWrite,
+                field * EepromBlockSize, content[1..]);
+
+            progress?.Report(new DumpProgress(
+                "セーブ書き込み (EEPROM 512B)",
+                (block + 1) * EepromBlockSize, data.Length));
+        }
     }
 
     /// <summary>EEPROM か。容量で通信の仕方が変わる唯一の装置。</summary>

@@ -27,6 +27,16 @@ public sealed class FakeGbaSaveCartridge(int saveSize) : IRfcaLink
 
     private byte _jitter;
 
+    /// <summary>
+    /// 4kbit の EEPROM として振る舞うか。
+    ///
+    /// アダプタは EEPROM の書き込みで常に 64kbit 用の 14 ビットアドレスを送る。
+    /// 4kbit の石はアドレスを 6 ビットしか見ないため、
+    /// 余った下位 8 ビットがデータの 1 バイト目として取り込まれる。
+    /// 2026-09-24 に実機で確かめた挙動をそのまま再現する。
+    /// </summary>
+    public bool Eeprom4kQuirk { get; init; }
+
     public byte[] Snapshot() => _save.ToArray();
 
     public void Preset(byte[] data) => data.CopyTo(_save, 0);
@@ -52,7 +62,36 @@ public sealed class FakeGbaSaveCartridge(int saveSize) : IRfcaLink
             throw new RfcaWriteBlockedException(
                 $"opcode 0x{opcode:X2} はセーブデータの領域ではありません");
 
+        if (Eeprom4kQuirk && opcode == RfcaOpcode.GbaEepromWrite)
+        {
+            WriteAsEeprom4k(address, data);
+            return;
+        }
+
         data.CopyTo(_save.AsSpan((int)address));
+    }
+
+    /// <summary>
+    /// 実機の 4kbit EEPROM 書き込みを再現する。
+    ///
+    /// アダプタは要求アドレスを 8 で割った値を 14 ビットのアドレス欄に載せる。
+    /// 石はその上位 6 ビットだけをブロック番号として使い、
+    /// 残り 8 ビットを 64 ビットデータの先頭として取り込む。
+    /// 続けて本体のデータが入り、64 ビットを超えた分は落ちる。
+    /// </summary>
+    private void WriteAsEeprom4k(uint address, ReadOnlySpan<byte> data)
+    {
+        uint field = address / 8;
+        int block = (int)(field >> 8) & 0x3F;
+        byte leading = (byte)(field & 0xFF);
+
+        Span<byte> stored = stackalloc byte[8];
+        stored[0] = leading;
+
+        for (int i = 1; i < 8 && i - 1 < data.Length; i++)
+            stored[i] = data[i - 1];
+
+        stored.CopyTo(_save.AsSpan(block * 8, 8));
     }
 
     public void WriteBankRegister(CartridgeKind kind, uint opcode, uint address, byte value,

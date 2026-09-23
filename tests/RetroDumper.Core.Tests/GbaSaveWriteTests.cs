@@ -143,7 +143,10 @@ public sealed class GbaSaveWriteTests
     [Fact]
     public void 読み出しが不安定なら書き込まない()
     {
-        var cart = new FakeGbaSaveCartridge(512) { AllowSaveWrites = true, UnstableAt = 100 };
+        var cart = new FakeGbaSaveCartridge(512)
+        {
+            AllowSaveWrites = true, UnstableAt = 100, Eeprom4kQuirk = true,
+        };
         var before = cart.Snapshot();
 
         var error = Assert.Throws<RfcaException>(
@@ -153,16 +156,54 @@ public sealed class GbaSaveWriteTests
         Assert.Equal(before, cart.Snapshot());
     }
 
-    /// <summary>安定していれば EEPROM にも書けること。</summary>
+    /// <summary>
+    /// **4kbit の EEPROM に、アダプタの癖を越えて書けること。**
+    ///
+    /// アダプタは EEPROM の書き込みで常に 64kbit 用の 14 ビットアドレスを送る。
+    /// 4kbit の石はアドレスを 6 ビットしか見ないため、余った下位 8 ビットが
+    /// データの 1 バイト目として取り込まれ、本体は 1 バイト押し出される。
+    /// 素直に送ると、どのブロックを指定してもブロック 0 にしか書けない。
+    ///
+    /// アドレス欄に「上位 6 ビット＝ブロック番号 / 下位 8 ビット＝1 バイト目」を
+    /// 詰め、本体には 2 バイト目以降だけを送ることで、狙いどおりに書ける。
+    /// 2026-09-24 に実機で確認した（512 バイト全体の書き戻しが照合まで通った）。
+    /// </summary>
     [Fact]
-    public void 読み出しが安定していればEEPROMにも書ける()
+    public void アダプタの癖を越えて4kbitEEPROMに書ける()
     {
-        var cart = new FakeGbaSaveCartridge(512) { AllowSaveWrites = true };
+        var cart = new FakeGbaSaveCartridge(512) { AllowSaveWrites = true, Eeprom4kQuirk = true };
         var data = Pattern(512);
 
         GbaSave.Write(cart, GbaSaveType.Eeprom4k, data);
 
         Assert.Equal(data, cart.Snapshot());
+    }
+
+    /// <summary>
+    /// 細工をせずに素直に送ると、どのブロックもブロック 0 に落ちる。
+    /// 実機で起きたことを、シミュレータが同じように再現していることの確認。
+    /// これが再現できていないと、上のテストは何も守っていない。
+    /// </summary>
+    [Fact]
+    public void 素直に送るとブロック0にしか書けない()
+    {
+        var cart = new FakeGbaSaveCartridge(512) { AllowSaveWrites = true, Eeprom4kQuirk = true };
+        var data = Pattern(512);
+
+        // 細工をしない送り方（ブロック番号をそのままアドレスにする）。
+        for (int block = 0; block < 64; block++)
+            cart.WriteSaveMemory(
+                CartridgeKind.GameBoyAdvance, RfcaOpcode.GbaEepromWrite,
+                (uint)(block * 8), data.AsSpan(block * 8, 8));
+
+        var after = cart.Snapshot();
+
+        // 最後に書いたブロック 63 の内容が、ブロック 0 に残る。
+        Assert.Equal(63, after[0]);
+        Assert.Equal(data[63 * 8], after[1]);
+
+        // ブロック 1 以降は手つかず。
+        Assert.All(after[8..].ToArray(), b => Assert.Equal(0, b));
     }
 
     /// <summary>読み出しの安定性だけを見る。内容は変えないこと。</summary>
