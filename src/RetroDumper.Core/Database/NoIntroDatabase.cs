@@ -7,12 +7,15 @@ namespace RetroDumper.Core.Database;
 /// <summary>
 /// No-Intro の DAT ファイル（XML）を読み、吸い出した ROM を照合する。
 ///
-/// DAT は本ソフトには同梱しない。利用者が自分で用意したものを読む。
-/// 配布物ではないデータを勝手に再配布しないための方針で、
-/// RetroFreakDumper も同じく *.dat をフォルダから読む作りになっている。
+/// GBA と NES(Headerless) の DAT は exe に埋め込んである（gzip、計 939KB）。
+/// そのまま使えるので、利用者が用意しなくても照合が効く。
 ///
-/// 入手先: https://datomatic.no-intro.org/  （Download → Daily）
-/// 置き場所: exe と同じ場所の DataBase フォルダ
+/// 更新版や他機種の DAT を使いたい場合は、exe と同じ場所の DataBase フォルダに
+/// *.dat を置く。埋め込みと同じ名前のファイルはフォルダ側が優先される。
+///
+/// 入手先: https://datomatic.no-intro.org/
+/// NES は **Headerless** を選ぶこと。当アプリが付ける iNES ヘッダは
+/// ミラーリングの向きなどを推測で埋めており、Headered とは一致しない。
 ///
 /// 用途は 2 つ:
 ///   1. 吸い出した ROM が既知の正規ダンプと一致するかの検証
@@ -43,12 +46,24 @@ public sealed class NoIntroDatabase
             "DataBase");
 
     /// <summary>
-    /// フォルダ内の *.dat をすべて読む。
-    /// フォルダが無い・DAT が 1 つも無い場合は空のまま返る（エラーにしない）。
+    /// 埋め込みの DAT と、フォルダ内の *.dat を読む。
+    ///
+    /// 埋め込み分を先に読み、そのあとフォルダ分を読む。
+    /// 同じ CRC32 のエントリはフォルダ側で上書きされるので、
+    /// 新しい DAT を DataBase フォルダに置けば、再ビルドせずに更新できる。
+    ///
+    /// フォルダが無い・DAT が 1 つも無い場合でもエラーにはしない。
     /// </summary>
-    public static NoIntroDatabase Load(string? directory = null, Action<string>? log = null)
+    /// <param name="includeEmbedded">
+    /// 埋め込みの DAT も読むか。テストでフォルダの内容だけを見たいときに false にする。
+    /// </param>
+    public static NoIntroDatabase Load(
+        string? directory = null, Action<string>? log = null, bool includeEmbedded = true)
     {
         var db = new NoIntroDatabase();
+
+        if (includeEmbedded) db.LoadEmbedded(log);
+
         string dir = directory ?? DefaultDirectory;
 
         if (!Directory.Exists(dir))
@@ -59,10 +74,16 @@ public sealed class NoIntroDatabase
 
         foreach (string path in Directory.GetFiles(dir, "*.dat").OrderBy(p => p))
         {
+            string fileName = Path.GetFileName(path);
+
+            // 埋め込みと同じ DAT はフォルダ側を優先し、二重に読まない。
+            if (db.LoadedFiles.Remove(fileName))
+                log?.Invoke($"内蔵 DAT より新しい同名ファイルを使います: {fileName}");
+
             try
             {
                 int added = db.LoadFile(path);
-                db.LoadedFiles.Add(Path.GetFileName(path));
+                db.LoadedFiles.Add(fileName);
                 log?.Invoke($"DAT を読み込みました: {Path.GetFileName(path)} ({added} 件)");
             }
             catch (Exception ex)
@@ -76,9 +97,58 @@ public sealed class NoIntroDatabase
         return db;
     }
 
+    /// <summary>
+    /// アセンブリに埋め込まれた DAT（gzip 圧縮）を読む。
+    /// 3.2MB の XML がそのままだと exe が膨らむので gzip で持つ。
+    /// </summary>
+    private void LoadEmbedded(Action<string>? log)
+    {
+        var assembly = typeof(NoIntroDatabase).Assembly;
+
+        foreach (string name in assembly.GetManifestResourceNames()
+                     .Where(n => n.EndsWith(".dat.gz", StringComparison.OrdinalIgnoreCase))
+                     .OrderBy(n => n))
+        {
+            try
+            {
+                using var stream = assembly.GetManifestResourceStream(name);
+                if (stream is null) continue;
+
+                using var gzip = new System.IO.Compression.GZipStream(
+                    stream, System.IO.Compression.CompressionMode.Decompress);
+
+                int added = LoadStream(gzip);
+                LoadedFiles.Add(ShortName(name));
+                log?.Invoke($"内蔵 DAT を読み込みました: {ShortName(name)} ({added} 件)");
+            }
+            catch (Exception ex)
+            {
+                log?.Invoke($"内蔵 DAT を読めませんでした: {ShortName(name)} — {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>リソース名から機種名の部分だけ取り出す。</summary>
+    private static string ShortName(string resourceName)
+    {
+        string s = resourceName;
+
+        const string marker = "Embedded.";
+        int i = s.IndexOf(marker, StringComparison.Ordinal);
+        if (i >= 0) s = s[(i + marker.Length)..];
+
+        return s.EndsWith(".gz", StringComparison.OrdinalIgnoreCase) ? s[..^3] : s;
+    }
+
     private int LoadFile(string path)
     {
-        var doc = XDocument.Load(path);
+        using var stream = File.OpenRead(path);
+        return LoadStream(stream);
+    }
+
+    private int LoadStream(Stream stream)
+    {
+        var doc = XDocument.Load(stream);
         int added = 0;
 
         foreach (var game in doc.Root?.Elements("game") ?? [])

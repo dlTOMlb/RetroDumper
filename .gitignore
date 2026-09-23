@@ -25,6 +25,10 @@ dist/
 tests/*.md
 dist/*.md
 
+# exe へ埋め込む No-Intro DAT は例外として管理対象にする。
+!src/RetroDumper.Core/Database/Embedded/
+!src/RetroDumper.Core/Database/Embedded/*.dat.gz
+
 # 実機診断の出力
 slot-comparison.txt
 slot-commands.txt

@@ -59,7 +59,7 @@ public sealed class NoIntroDatabaseTests : IDisposable
     [Fact]
     public void DATが無くても空で返り例外にならない()
     {
-        var db = NoIntroDatabase.Load(Path.Combine(_dir, "存在しない"));
+        var db = NoIntroDatabase.Load(Path.Combine(_dir, "存在しない"), includeEmbedded: false);
 
         Assert.True(db.IsEmpty);
         Assert.Equal(0, db.EntryCount);
@@ -72,7 +72,7 @@ public sealed class NoIntroDatabaseTests : IDisposable
         var rom = SampleRom();
         WriteDat(rom);
 
-        var db = NoIntroDatabase.Load(_dir);
+        var db = NoIntroDatabase.Load(_dir, includeEmbedded: false);
 
         Assert.Equal(1, db.EntryCount);
 
@@ -89,7 +89,7 @@ public sealed class NoIntroDatabaseTests : IDisposable
         var rom = SampleRom();
         WriteDat(rom);
 
-        var db = NoIntroDatabase.Load(_dir);
+        var db = NoIntroDatabase.Load(_dir, includeEmbedded: false);
 
         var altered = (byte[])rom.Clone();
         altered[100] ^= 0xFF;
@@ -107,7 +107,7 @@ public sealed class NoIntroDatabaseTests : IDisposable
         var rom = SampleRom();
         WriteDat(rom);
 
-        var db = NoIntroDatabase.Load(_dir);
+        var db = NoIntroDatabase.Load(_dir, includeEmbedded: false);
 
         Assert.Null(db.Match(rom, rom.Length / 2));
     }
@@ -118,7 +118,7 @@ public sealed class NoIntroDatabaseTests : IDisposable
         var rom = SampleRom();
         WriteDat(rom);
 
-        var db = NoIntroDatabase.Load(_dir);
+        var db = NoIntroDatabase.Load(_dir, includeEmbedded: false);
 
         Assert.Single(db.FindByCrc(Checksums.Crc32(rom)));
         Assert.Empty(db.FindByCrc(0xDEADBEEF));
@@ -132,7 +132,7 @@ public sealed class NoIntroDatabaseTests : IDisposable
         File.WriteAllText(Path.Combine(_dir, "broken.dat"), "<datafile><game>");
 
         var log = new List<string>();
-        var db = NoIntroDatabase.Load(_dir, log.Add);
+        var db = NoIntroDatabase.Load(_dir, log.Add, includeEmbedded: false);
 
         Assert.Equal(1, db.EntryCount);
         Assert.Contains(log, l => l.Contains("読めませんでした"));
@@ -154,7 +154,7 @@ public sealed class NoIntroDatabaseTests : IDisposable
              </datafile>
              """);
 
-        var db = NoIntroDatabase.Load(_dir);
+        var db = NoIntroDatabase.Load(_dir, includeEmbedded: false);
 
         Assert.Equal("Minimal", db.Match(rom, rom.Length)?.GameName);
     }
@@ -215,7 +215,7 @@ public sealed class NesHeaderlessMatchTests : IDisposable
         WriteHeaderlessDat(body);
 
         var file = RetroDumper.Core.Nes.NesDumper.BuildINesFile(0, body, []);
-        var db = NoIntroDatabase.Load(_dir);
+        var db = NoIntroDatabase.Load(_dir, includeEmbedded: false);
 
         // ファイル全体では一致しない（ヘッダ 16 バイトが余分）。
         Assert.Null(db.Match(file, file.Length));
@@ -233,12 +233,71 @@ public sealed class NesHeaderlessMatchTests : IDisposable
         var body = RomBody();
         WriteHeaderlessDat(body);
 
-        var db = NoIntroDatabase.Load(_dir);
+        var db = NoIntroDatabase.Load(_dir, includeEmbedded: false);
 
         foreach (int mapper in new[] { 0, 1, 4, 66 })
         {
             var file = RetroDumper.Core.Nes.NesDumper.BuildINesFile(mapper, body, []);
             Assert.NotNull(db.Match(file.AsSpan(16), file.Length - 16));
         }
+    }
+}
+
+/// <summary>
+/// exe に埋め込んだ DAT。
+///
+/// 利用者が何も用意しなくても照合が効くように、GBA と NES(Headerless) の
+/// DAT を gzip で埋め込んである。ビルド設定を壊すと黙って照合が無効になり、
+/// 「一致なし」としか出なくなるため、埋め込みが生きていることを固定する。
+/// </summary>
+public sealed class EmbeddedDatabaseTests
+{
+    [Fact]
+    public void 埋め込みDATが読み込まれる()
+    {
+        // 存在しないフォルダを指定して、埋め込み分だけを見る。
+        var db = NoIntroDatabase.Load(
+            Path.Combine(Path.GetTempPath(), "rd-nonexistent-" + Guid.NewGuid().ToString("N")));
+
+        Assert.False(db.IsEmpty);
+        Assert.True(db.EntryCount > 5000, $"件数が少なすぎます: {db.EntryCount}");
+    }
+
+    [Fact]
+    public void GBAとNESの両方が入っている()
+    {
+        var db = NoIntroDatabase.Load(
+            Path.Combine(Path.GetTempPath(), "rd-nonexistent-" + Guid.NewGuid().ToString("N")));
+
+        Assert.Contains(db.LoadedFiles, f => f.Contains("Game Boy Advance"));
+        Assert.Contains(db.LoadedFiles, f => f.Contains("Nintendo Entertainment System"));
+    }
+
+    /// <summary>
+    /// NES は Headerless でなければならない。
+    /// Headered だと、当アプリが付ける iNES ヘッダとの差で一致しなくなる。
+    /// </summary>
+    [Fact]
+    public void NESはHeaderless版が入っている()
+    {
+        var db = NoIntroDatabase.Load(
+            Path.Combine(Path.GetTempPath(), "rd-nonexistent-" + Guid.NewGuid().ToString("N")));
+
+        Assert.Contains(db.LoadedFiles, f => f.Contains("Headerless"));
+        Assert.DoesNotContain(db.LoadedFiles, f => f.Contains("(Headered)"));
+    }
+
+    /// <summary>実際に吸い出した ROM が引けること（Crash Bandicoot Advance）。</summary>
+    [Fact]
+    public void 実機で吸い出したROMのCRCが引ける()
+    {
+        var db = NoIntroDatabase.Load(
+            Path.Combine(Path.GetTempPath(), "rd-nonexistent-" + Guid.NewGuid().ToString("N")));
+
+        var hit = db.FindByCrc(0x64767B34);
+
+        Assert.NotEmpty(hit);
+        Assert.Contains(hit, e => e.GameName.Contains("Crash Bandicoot"));
+        Assert.Equal(8388608, hit[0].Size);
     }
 }
