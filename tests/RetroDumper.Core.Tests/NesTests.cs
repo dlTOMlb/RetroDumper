@@ -435,26 +435,27 @@ public sealed class NesAutoDetectTests : IDisposable
     };
 
     /// <summary>
-    /// 総当たりは DAT との一致で正解を決めるので、
-    /// DAT に載っていなければ特定できない。その場合は理由を説明して失敗する。
+    /// 照合できなくても、吸い出せたデータは捨てないこと。
+    ///
+    /// 「吸い出しは成立したが DAT に一致しない」ときに例外で落として
+    /// データを破棄していた。未収録のソフトや未対応マッパーでも、
+    /// まず手元にファイルが残るほうがよい。
     /// </summary>
     [Fact]
-    public void DATに無ければ理由を添えて失敗する()
+    public void 照合できなくても吸い出したデータを返す()
     {
         var cart = new FakeNesCartridge(Rom(32, 3), Rom(8, 11));
         var dumper = new NesDumper();
         var info = dumper.Identify(cart, AutoMapper);
 
-        var ex = Assert.Throws<RfcaException>(
-            () => dumper.Dump(cart, info, AutoMapper, null, CancellationToken.None));
+        var result = dumper.Dump(cart, info, AutoMapper, null, CancellationToken.None);
 
-        Assert.Contains("マッパーを特定できませんでした", ex.Message);
+        Assert.NotEmpty(result.Rom);
+        Assert.Equal(false, result.ChecksumOk);
 
-        // 何を試したのかが分かること。黙って失敗しない。
-        Assert.Contains("NROM", ex.Message);
-
-        // 次に何をすればよいかが書いてあること。
-        Assert.Contains("ファミコン詳細", ex.Message);
+        // 何を試したのかが分かること。黙って諦めない。
+        Assert.Contains("NROM", result.ChecksumDetail);
+        Assert.Contains("一致しませんでした", result.ChecksumDetail);
     }
 
     /// <summary>誤ったマッパーを試してもカセットへの書き込みは起きないこと。</summary>
@@ -465,8 +466,7 @@ public sealed class NesAutoDetectTests : IDisposable
         var dumper = new NesDumper();
         var info = dumper.Identify(cart, AutoMapper);
 
-        try { dumper.Dump(cart, info, AutoMapper, null, CancellationToken.None); }
-        catch (RfcaException) { /* 特定できないのは想定内 */ }
+        dumper.Dump(cart, info, AutoMapper, null, CancellationToken.None);
 
         // 内容を書き換えるライトは 1 件も起きない。
         Assert.Empty(cart.Writes);
@@ -506,5 +506,64 @@ public sealed class NesAutoDetectTests : IDisposable
         var info = new NesDumper().Identify(cart, AutoMapper);
 
         Assert.Contains(info.Warnings, w => w.Contains("順に試して"));
+    }
+}
+
+/// <summary>
+/// CHR-RAM の検出。
+///
+/// CHR-RAM のカセットには CHR-ROM が載っていない。PPU バスを読んでも
+/// RAM の不定値か開放バスが見えるだけで、多くは全バイトが同じ値になる。
+///
+/// これを見ないと、存在しない CHR-ROM を 8KB 付けてしまい、
+/// 吸い出し自体は成立しているのに No-Intro と一致しなくなる。
+/// </summary>
+public sealed class NesChrRamTests
+{
+    private static byte[] Prg(int kb)
+    {
+        var rom = new byte[kb * 1024];
+
+        for (int i = 0; i < rom.Length; i++)
+            rom[i] = (byte)(((i >> 10) * 131 + i * 17 + 3) & 0xFF);
+
+        return rom;
+    }
+
+    private static readonly DumpOptions Options = new()
+    {
+        NesMapperOverride = 0,
+        IncludeSaveRam = false,
+        VerifyChecksum = false,
+    };
+
+    [Fact]
+    public void CHRROMが無ければCHR0として記録される()
+    {
+        // CHR を載せていないカセット。PPU バスは開放バス (0xFF)。
+        var cart = new FakeNesCartridge(Prg(32), []);
+        var dumper = new NesDumper();
+
+        var info = dumper.Identify(cart, Options);
+        var result = dumper.Dump(cart, info, Options, null, CancellationToken.None);
+
+        Assert.Equal(0, result.Rom[5]);                 // iNES の CHR 欄
+        Assert.Equal(16 + 32 * 1024, result.Rom.Length); // ヘッダ + PRG のみ
+    }
+
+    [Fact]
+    public void CHRROMがあれば従来どおり記録される()
+    {
+        var chr = new byte[8 * 1024];
+        for (int i = 0; i < chr.Length; i++) chr[i] = (byte)((i * 29 + 11) & 0xFF);
+
+        var cart = new FakeNesCartridge(Prg(32), chr);
+        var dumper = new NesDumper();
+
+        var info = dumper.Identify(cart, Options);
+        var result = dumper.Dump(cart, info, Options, null, CancellationToken.None);
+
+        Assert.Equal(1, result.Rom[5]);
+        Assert.Equal(chr, result.Rom.AsSpan(16 + 32 * 1024).ToArray());
     }
 }

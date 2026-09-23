@@ -20,12 +20,16 @@ public sealed partial class NesDumper
     /// 誤ったマッパーを試してもカセットは壊れない。書き込むのはマッパーの
     /// ラッチだけで、セーブ領域 ($6000-$7FFF) は遮断されている。
     /// </summary>
-    private static byte[] AutoDetectAndDump(
+    /// <summary>総当たりの結果。特定できたかと、その経過。</summary>
+    internal sealed record AutoDetectResult(byte[] Rom, string Mapper, string? Matched, string Log);
+
+    private static AutoDetectResult AutoDetectAndDump(
         NesBus bus, IProgress<DumpProgress>? progress, CancellationToken cancellationToken)
     {
         var db = NoIntroDatabase.Load();
         var attempted = new List<string>();
         byte[]? plausible = null;
+        string plausibleMapper = "";
 
         foreach (var mapper in NesMapper.All)
         {
@@ -40,7 +44,7 @@ public sealed partial class NesDumper
             {
                 mapper.Initialize(bus);
                 prg = DetectSize(bus, mapper, isPrg: true);
-                chr = mapper.ChrBankSize > 0 ? DetectSize(bus, mapper, isPrg: false) : 0;
+                chr = mapper.ChrBankSize > 0 ? DetectChrSize(bus, mapper) : 0;
             }
             catch (RfcaException ex)
             {
@@ -79,26 +83,36 @@ public sealed partial class NesDumper
                 progress?.Report(new DumpProgress(
                     $"{label} で確定: {hit.GameName}", candidate.Length, candidate.Length));
 
-                return candidate;
+                attempted.Add($"{label}: No-Intro と一致 → {hit.GameName}");
+
+                return new AutoDetectResult(
+                    candidate, label, hit.GameName,
+                    string.Join(Environment.NewLine, attempted.Select(a => "  " + a)));
             }
 
             attempted.Add(
                 $"{label}: PRG {prg / 1024}KB / CHR {chr / 1024}KB を吸い出したが DAT に一致せず");
 
-            plausible ??= candidate;
+            if (plausible is null)
+            {
+                plausible = candidate;
+                plausibleMapper = label;
+            }
         }
 
         string tried = string.Join(Environment.NewLine, attempted.Select(a => "  " + a));
 
-        // 吸い出し自体は成立したのに一致しなかった場合と、
-        // そもそも読めていない場合では、次にやることが違う。
+        // 吸い出せたものを捨てない。
+        // 照合できなかっただけで、データ自体は取れている可能性がある。
+        // 未収録のソフトや未対応マッパーでも、まず手元にファイルが残るほうがよい。
         if (plausible is not null)
-            throw new RfcaException(
-                "マッパーを特定できませんでした。吸い出しは成立しましたが、" +
-                "どれも No-Intro DAT と一致しません。" + Environment.NewLine + Environment.NewLine +
-                tried + Environment.NewLine + Environment.NewLine +
-                "未収録のソフトか、対応していないマッパーの可能性があります。" +
-                "「ファミコン詳細」でマッパーを指定すると、照合せずにその設定で吸い出します。");
+        {
+            progress?.Report(new DumpProgress(
+                "照合できませんでした（データは保持しています）",
+                plausible.Length, plausible.Length));
+
+            return new AutoDetectResult(plausible, plausibleMapper, null, tried);
+        }
 
         throw new RfcaException(
             "マッパーを特定できませんでした。" + Environment.NewLine + Environment.NewLine +
@@ -140,7 +154,7 @@ public sealed partial class NesDumper
         if (prgSize <= 0) prgSize = DetectSize(bus, mapper, isPrg: true);
 
         if (chrSize <= 0 && mapper.ChrBankSize > 0)
-            chrSize = DetectSize(bus, mapper, isPrg: false);
+            chrSize = DetectChrSize(bus, mapper);
 
         if (prgSize <= 0)
             throw new RfcaException("PRG-ROM の容量を判定できませんでした。手動で指定してください。");
@@ -160,5 +174,29 @@ public sealed partial class NesDumper
                 progress, ref done, total, cancellationToken);
 
         return BuildINesFile(mapper.Number, prg, chr);
+    }
+
+    /// <summary>
+    /// CHR-ROM の容量を実測する。**CHR-RAM の検出を含む。**
+    ///
+    /// CHR-RAM のカセットには CHR-ROM が載っていない。
+    /// PPU バスを読むと RAM の不定値か開放バスが見えるだけで、
+    /// 多くは全バイトが同じ値になる。それを 0KB と判定する。
+    ///
+    /// これを見ないと、存在しない CHR-ROM を 8KB 付けてしまい、
+    /// 吸い出し自体は成立しているのに No-Intro と一致しなくなる。
+    /// </summary>
+    private static long DetectChrSize(NesBus bus, NesMapper mapper)
+    {
+        var (min, max) = mapper.ChrSizeRange;
+        if (mapper.ChrBankSize <= 0 || max <= 0) return 0;
+
+        byte[]? probe = ReadProbe(bus, mapper, 0, mapper.ChrBankSize, 256, isPrg: false);
+
+        // 読めない、または全バイト同じ = CHR-ROM が載っていない。
+        if (probe is null || IsFlat(probe))
+            return min == max ? min : 0;
+
+        return DetectSize(bus, mapper, isPrg: false);
     }
 }

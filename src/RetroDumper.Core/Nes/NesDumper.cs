@@ -148,29 +148,46 @@ public sealed partial class NesDumper : ICartridgeDumper
         // 手動指定を優先し、無ければ識別で確定した値を使う。
         int? mapperNo = options.NesMapperOverride ?? info.NesMapperNumber;
 
-        // マッパーが分からなければ総当たりで特定する。
-        byte[] rom = mapperNo is null
-            ? AutoDetectAndDump(bus, progress, cancellationToken)
-            : DumpWith(
-                bus,
-                NesMapper.ForNumber(mapperNo.Value)
-                    ?? throw new RfcaException(
-                        $"マッパー {mapperNo} には未対応です。現在対応しているのは " +
-                        string.Join(" / ", NesMapper.All.Select(m => $"{m.Number} ({m.Name})")) +
-                        " です。"),
+        AutoDetectResult? auto = null;
+        byte[] rom;
+
+        if (mapperNo is int chosen)
+        {
+            var mapper = NesMapper.ForNumber(chosen)
+                ?? throw new RfcaException(
+                    $"マッパー {chosen} には未対応です。現在対応しているのは " +
+                    string.Join(" / ", NesMapper.All.Select(m => $"{m.Number} ({m.Name})")) +
+                    " です。");
+
+            rom = DumpWith(
+                bus, mapper,
                 options.NesPrgSize is > 0 ? options.NesPrgSize.Value : info.NesPrgSize,
                 options.NesChrSize is > 0 ? options.NesChrSize.Value : info.NesChrSize,
                 progress, cancellationToken);
+        }
+        else
+        {
+            // マッパーが分からないので総当たりで特定する。
+            auto = AutoDetectAndDump(bus, progress, cancellationToken);
+            rom = auto.Rom;
+        }
 
         return new DumpResult
         {
             Info = info,
             Rom = rom,
             Crc32 = Checksums.Crc32(rom),
-            ChecksumOk = null,
-            ChecksumDetail =
-                "ファミコンのカセットはチェックサムを持ちません。" +
-                "No-Intro DAT との照合で正否を確かめてください。",
+
+            // ファミコンのカセットはチェックサムを持たないので、
+            // 正否の判断は No-Intro DAT との照合に頼るしかない。
+            ChecksumOk = auto is null ? null : auto.Matched is not null,
+            ChecksumDetail = auto is null
+                ? "ファミコンのカセットはチェックサムを持ちません。" +
+                  "No-Intro DAT との照合で正否を確かめてください。"
+                : auto.Matched is not null
+                    ? $"{auto.Mapper} で No-Intro と一致: {auto.Matched}"
+                    : "どのマッパーでも No-Intro と一致しませんでした。" +
+                      "吸い出したデータは保存します。" + Environment.NewLine + auto.Log,
         };
     }
 
