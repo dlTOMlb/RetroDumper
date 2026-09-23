@@ -83,6 +83,74 @@ public static class GbaSave
     private static int IndexOf(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle)
         => haystack.IndexOf(needle);
 
+    /// <summary>
+    /// EEPROM のもう一方の容量。区別が付かないとき用。
+    ///
+    /// 目印は 4kbit も 64kbit も同じ "EEPROM_V" で、**容量が書かれていない。**
+    /// 参照実装も一律 64kbit と判定し、4kbit は利用者の手動選択に任せている。
+    /// EEPROM 以外は目印で容量まで決まるので、ここでは扱わない。
+    /// </summary>
+    public static GbaSaveType? AlternateEeprom(GbaSaveType type) => type switch
+    {
+        GbaSaveType.Eeprom64k => GbaSaveType.Eeprom4k,
+        GbaSaveType.Eeprom4k => GbaSaveType.Eeprom64k,
+        _ => null,
+    };
+
+    /// <summary>
+    /// EEPROM の容量を、読んだ内容から絞り込む。
+    ///
+    /// 4kbit (512B) の石を 8KB として読むと、512 バイトごとに同じ内容が
+    /// 繰り返して見える。折り返しているためで、これを手掛かりにする。
+    ///
+    /// ただし中身が空（全バイト同じ）のときは、どちらでも繰り返して見えるため
+    /// 判断できない。その場合は判定を変えない。
+    /// 読むだけで、書き込みは一切行わない。
+    /// </summary>
+    public static GbaSaveType RefineEepromSize(
+        IRfcaLink link, GbaSaveType type, CancellationToken cancellationToken = default)
+    {
+        if (type != GbaSaveType.Eeprom64k) return type;
+
+        byte[] data;
+
+        try
+        {
+            data = Read(link, GbaSaveType.Eeprom64k, null, cancellationToken);
+        }
+        catch (RfcaException)
+        {
+            return type;
+        }
+
+        if (IsFlat(data)) return type;
+
+        return RepeatsEvery(data, SizeOf(GbaSaveType.Eeprom4k))
+            ? GbaSaveType.Eeprom4k
+            : type;
+    }
+
+    private static bool IsFlat(ReadOnlySpan<byte> data)
+    {
+        foreach (byte b in data)
+            if (b != data[0]) return false;
+
+        return true;
+    }
+
+    /// <summary>その長さごとに同じ内容が繰り返しているか。</summary>
+    private static bool RepeatsEvery(ReadOnlySpan<byte> data, int period)
+    {
+        if (period <= 0 || data.Length <= period) return false;
+
+        var first = data[..period];
+
+        for (int at = period; at + period <= data.Length; at += period)
+            if (!data.Slice(at, period).SequenceEqual(first)) return false;
+
+        return true;
+    }
+
     /// <summary>セーブデータを読む。書き込みは一切行わない。</summary>
     public static byte[] Read(
         IRfcaLink link, GbaSaveType type,

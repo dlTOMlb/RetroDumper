@@ -972,9 +972,31 @@ public partial class MainWindow : Window
 
         var detected = GbaSave.Detect(_lastGbaRom);
 
-        Log(detected == GbaSaveType.None
-            ? "ROM に目印が見つかりませんでした。セーブしないソフトか、独自の方式です。手で指定してください。"
-            : $"セーブ装置を判定しました: {GbaSave.DisplayName(detected)}");
+        if (detected == GbaSaveType.None)
+        {
+            Log("ROM に目印が見つかりませんでした。セーブしないソフトか、独自の方式です。手で指定してください。");
+            return detected;
+        }
+
+        // EEPROM の目印は 4kbit も 64kbit も同じで、容量が書かれていない。
+        // 読んだ内容の折り返しから絞り込む。読むだけで書き込みはしない。
+        if (GbaSave.AlternateEeprom(detected) is not null && _link is not null)
+        {
+            var link = _link;
+            var token = _cts?.Token ?? CancellationToken.None;
+
+            var refined = await Task.Run(() => GbaSave.RefineEepromSize(link, detected, token));
+
+            if (refined != detected)
+            {
+                Log($"EEPROM の内容が {GbaSave.SizeOf(refined)} バイトごとに折り返しています。" +
+                    $"{GbaSave.DisplayName(refined)} と判断しました。");
+
+                detected = refined;
+            }
+        }
+
+        Log($"セーブ装置を判定しました: {GbaSave.DisplayName(detected)}");
 
         return detected;
     }
@@ -1177,6 +1199,7 @@ public partial class MainWindow : Window
 
             long size = target.Size;
 
+
             var open = new OpenFileDialog
             {
                 Title = "書き込むセーブデータ",
@@ -1190,6 +1213,37 @@ public partial class MainWindow : Window
             }
 
             byte[] data = await File.ReadAllBytesAsync(open.FileName);
+
+            // EEPROM は目印で容量が決まらない。選ばれたファイルが
+            // もう一方の容量に一致するなら、取り違えではなく容量の判定違いの
+            // 可能性が高い。捨てずに、そちらとして書くかを尋ねる。
+            if (data.Length != size
+                && _info.Kind == CartridgeKind.GameBoyAdvance
+                && GbaSave.AlternateEeprom(target.GbaType) is GbaSaveType alternate
+                && data.Length == GbaSave.SizeOf(alternate))
+            {
+                var switchTo = MessageBox.Show(this,
+                    $"選んだファイルは {data.Length} バイトで、" +
+                    $"{GbaSave.DisplayName(alternate)} の大きさに一致します。\n\n" +
+                    $"GBA の EEPROM は ROM の目印では 512B と 8KB を区別できません。\n" +
+                    $"現在の判定は {target.Label} です。\n\n" +
+                    $"{GbaSave.DisplayName(alternate)} として書き込みますか？",
+                    "セーブの書き込み", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+                if (switchTo == MessageBoxResult.Yes)
+                {
+                    target = target with
+                    {
+                        Label = GbaSave.DisplayName(alternate),
+                        Size = GbaSave.SizeOf(alternate),
+                        GbaType = alternate,
+                    };
+
+                    size = target.Size;
+
+                    Log($"セーブ装置を {target.Label} として扱います。");
+                }
+            }
 
             if (data.Length != size)
             {

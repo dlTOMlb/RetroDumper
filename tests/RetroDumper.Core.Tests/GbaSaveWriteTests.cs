@@ -114,3 +114,92 @@ public sealed class GbaSaveWriteTests
         Assert.Equal(data, cart.Snapshot());
     }
 }
+
+/// <summary>
+/// GBA の EEPROM は、ROM の目印では容量が分からない。
+///
+/// 4kbit (512B) も 64kbit (8KB) も目印は同じ "EEPROM_V" で、
+/// 容量が書かれていない。参照実装も一律 64kbit と判定し、
+/// 4kbit は利用者の手動選択に任せている。
+/// こちらは読んだ内容の折り返しから絞り込む。
+/// </summary>
+public sealed class GbaEepromSizeTests
+{
+    [Fact]
+    public void 目印だけでは容量を区別できない()
+    {
+        var rom = new byte[4096];
+        System.Text.Encoding.ASCII.GetBytes("EEPROM_V122").CopyTo(rom, 100);
+
+        // 4kbit のカセットでも、目印からは 64kbit と判定される。
+        Assert.Equal(GbaSaveType.Eeprom64k, GbaSave.Detect(rom));
+    }
+
+    [Theory]
+    [InlineData(GbaSaveType.Eeprom64k, GbaSaveType.Eeprom4k)]
+    [InlineData(GbaSaveType.Eeprom4k, GbaSaveType.Eeprom64k)]
+    public void もう一方の容量を引ける(GbaSaveType type, GbaSaveType expected)
+        => Assert.Equal(expected, GbaSave.AlternateEeprom(type));
+
+    [Theory]
+    [InlineData(GbaSaveType.Sram)]
+    [InlineData(GbaSaveType.Flash512k)]
+    [InlineData(GbaSaveType.Flash1M)]
+    public void EEPROM以外にもう一方は無い(GbaSaveType type)
+        => Assert.Null(GbaSave.AlternateEeprom(type));
+
+    /// <summary>
+    /// 512 バイトごとに同じ内容が繰り返していれば、4kbit の石が
+    /// 折り返して見えている。
+    /// </summary>
+    [Fact]
+    public void 折り返していれば512バイトと判断する()
+    {
+        var cart = new FakeGbaSaveCartridge(8192);
+        var block = new byte[512];
+
+        for (int i = 0; i < block.Length; i++) block[i] = (byte)(i * 7 + 1);
+
+        var whole = new byte[8192];
+        for (int at = 0; at < whole.Length; at += 512) block.CopyTo(whole, at);
+
+        cart.Preset(whole);
+
+        Assert.Equal(GbaSaveType.Eeprom4k, GbaSave.RefineEepromSize(cart, GbaSaveType.Eeprom64k));
+    }
+
+    [Fact]
+    public void 折り返していなければ8KBのまま()
+    {
+        var cart = new FakeGbaSaveCartridge(8192);
+        var data = new byte[8192];
+
+        for (int i = 0; i < data.Length; i++) data[i] = (byte)(i * 31 + (i >> 8) + 1);
+
+        cart.Preset(data);
+
+        Assert.Equal(GbaSaveType.Eeprom64k, GbaSave.RefineEepromSize(cart, GbaSaveType.Eeprom64k));
+    }
+
+    /// <summary>
+    /// 中身が空のときは、どちらでも繰り返して見えるので判断できない。
+    /// 勝手に小さいほうへ倒さないこと。
+    /// </summary>
+    [Fact]
+    public void 中身が空なら判定を変えない()
+    {
+        var cart = new FakeGbaSaveCartridge(8192);
+        cart.Preset(Enumerable.Repeat((byte)0xFF, 8192).ToArray());
+
+        Assert.Equal(GbaSaveType.Eeprom64k, GbaSave.RefineEepromSize(cart, GbaSaveType.Eeprom64k));
+    }
+
+    /// <summary>EEPROM 以外は読みに行かないこと。</summary>
+    [Fact]
+    public void EEPROM以外は読まない()
+    {
+        var cart = new FakeGbaSaveCartridge(32768);
+
+        Assert.Equal(GbaSaveType.Sram, GbaSave.RefineEepromSize(cart, GbaSaveType.Sram));
+    }
+}
