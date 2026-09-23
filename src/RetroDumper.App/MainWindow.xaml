@@ -108,6 +108,25 @@
                                 </StackPanel>
                             </GroupBox>
 
+                            <GroupBox Header="GBA セーブデータ">
+                                <StackPanel>
+                                    <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,0,0,4"
+                                               Text="GBA はセーブ装置の種類をヘッダで申告しません。ROM の中に残る目印（SRAM_V / FLASH1M_V など）から判定します。「自動」は吸い出し済みの ROM を使い、無ければ ROM を読んでから判定します。" />
+                                    <Label Content="セーブ装置" />
+                                    <ComboBox x:Name="GbaSaveTypeCombo" />
+                                    <Button x:Name="GbaSaveReadButton" Content="セーブを吸い出す" Click="GbaSaveRead_Click"
+                                            IsEnabled="False" Margin="0,6,0,0" FontWeight="Bold" />
+                                    <CheckBox x:Name="GbaSaveWriteAllowCheck" Content="セーブデータの書き込みを許可する"
+                                              Margin="0,10,0,0" Checked="GbaSaveWriteAllow_Changed"
+                                              Unchecked="GbaSaveWriteAllow_Changed"
+                                              ToolTip="カートリッジのセーブデータを上書きします。ROM 領域には書き込めません。" />
+                                    <TextBlock TextWrapping="Wrap" Foreground="#A00" FontSize="11" Margin="0,2,0,0"
+                                               Text="書き込むとカートリッジのセーブデータが置き換わります。書き込む前に、現在のセーブを自動で控えに残します。" />
+                                    <Button x:Name="GbaSaveWriteButton" Content="セーブを書き込む" Click="GbaSaveWrite_Click"
+                                            IsEnabled="False" Margin="0,6,0,0" Background="#FFE0E0" />
+                                </StackPanel>
+                            </GroupBox>
+
                             <GroupBox Header="サイズ">
                                 <StackPanel>
                                     <CheckBox x:Name="OverrideSizeCheck" Content="ROM サイズを手動指定"

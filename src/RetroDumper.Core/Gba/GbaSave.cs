@@ -1,0 +1,221 @@
+using System.Text;
+using RetroDumper.Core.Dumping;
+using RetroDumper.Core.Transport;
+
+namespace RetroDumper.Core.Gba;
+
+/// <summary>GBA のセーブ装置の種類。</summary>
+public enum GbaSaveType
+{
+    None,
+    Sram,
+    Fram,
+    Eeprom4k,
+    Eeprom64k,
+    Flash512k,
+    Flash1M,
+}
+
+/// <summary>
+/// GBA のセーブデータの吸い出しと書き込み。
+///
+/// GBA のカートリッジはセーブ装置の種類をヘッダで申告しない。
+/// 代わりに、ROM の中に開発キットのライブラリが残した目印の文字列がある。
+/// "SRAM_V" や "FLASH1M_V" といった並びで、これを探して種類を決める。
+/// 手順は RetroFreakDumper の SaveDataController 各実装に合わせた。
+///
+/// **書き込みはセーブ専用の opcode だけを使う。**
+/// GBA は ROM とセーブで opcode が別系統になっており、
+/// ROM へ書く opcode はそもそも存在しない。
+/// したがってこの経路から ROM を壊すことはできない。
+/// </summary>
+public static class GbaSave
+{
+    /// <summary>ROM 内に残る目印。先に一致したものを採る（順序に意味がある）。</summary>
+    private static readonly (string Signature, GbaSaveType Type)[] Signatures =
+    [
+        ("SRAM_F_V", GbaSaveType.Fram),       // SRAM_V より先に見ること
+        ("SRAM_V", GbaSaveType.Sram),
+        ("EEPROM_V", GbaSaveType.Eeprom64k),
+        ("FLASH1M_V", GbaSaveType.Flash1M),   // FLASH_V より先に見ること
+        ("FLASH512_V", GbaSaveType.Flash512k),
+        ("FLASH_V", GbaSaveType.Flash512k),
+    ];
+
+    /// <summary>その種類のセーブ装置の容量（バイト）。</summary>
+    public static int SizeOf(GbaSaveType type) => type switch
+    {
+        GbaSaveType.Sram => 32 * 1024,
+        GbaSaveType.Fram => 32 * 1024,
+        GbaSaveType.Eeprom4k => 512,
+        GbaSaveType.Eeprom64k => 8 * 1024,
+        GbaSaveType.Flash512k => 64 * 1024,
+        GbaSaveType.Flash1M => 128 * 1024,
+        _ => 0,
+    };
+
+    public static string DisplayName(GbaSaveType type) => type switch
+    {
+        GbaSaveType.Sram => "SRAM 32KB",
+        GbaSaveType.Fram => "FRAM 32KB",
+        GbaSaveType.Eeprom4k => "EEPROM 512B",
+        GbaSaveType.Eeprom64k => "EEPROM 8KB",
+        GbaSaveType.Flash512k => "フラッシュ 64KB",
+        GbaSaveType.Flash1M => "フラッシュ 128KB",
+        _ => "なし",
+    };
+
+    /// <summary>
+    /// ROM の中から目印を探して種類を決める。
+    ///
+    /// 目印が無いソフトもある（セーブしない、または独自実装）。
+    /// その場合は None を返す。利用者が手で指定できる余地を残すこと。
+    /// </summary>
+    public static GbaSaveType Detect(ReadOnlySpan<byte> rom)
+    {
+        foreach (var (signature, type) in Signatures)
+            if (IndexOf(rom, Encoding.ASCII.GetBytes(signature)) >= 0)
+                return type;
+
+        return GbaSaveType.None;
+    }
+
+    private static int IndexOf(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle)
+        => haystack.IndexOf(needle);
+
+    /// <summary>セーブデータを読む。書き込みは一切行わない。</summary>
+    public static byte[] Read(
+        IRfcaLink link, GbaSaveType type,
+        IProgress<DumpProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        int size = SizeOf(type);
+
+        if (size == 0)
+            throw new RfcaException(
+                "セーブ装置の種類が分かりません。" +
+                "ROM に目印が無いため、種類を手で指定してください。");
+
+        uint opcode = ReadOpcodeFor(type);
+        var result = new byte[size];
+        int block = ReadBlockSize(type);
+        int done = 0;
+
+        while (done < size)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            int length = Math.Min(block, size - done);
+            link.Read(opcode, (uint)done, result.AsSpan(done, length));
+
+            done += length;
+            progress?.Report(new DumpProgress($"セーブ ({DisplayName(type)})", done, size));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// セーブデータを書き込み、読み戻して照合する。
+    ///
+    /// 照合まで済ませて初めて成功とする。書けたつもりで壊れているのが
+    /// いちばん困るため、参照実装も同じく 1 バイトずつ突き合わせている。
+    /// </summary>
+    public static void Write(
+        IRfcaLink link, GbaSaveType type, byte[] data,
+        IProgress<DumpProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        int size = SizeOf(type);
+
+        if (size == 0)
+            throw new RfcaException("セーブ装置の種類が分かりません。");
+
+        if (data.Length != size)
+            throw new RfcaException(
+                $"セーブデータの大きさが合いません。" +
+                $"{DisplayName(type)} は {size} バイトですが、{data.Length} バイト渡されました。");
+
+        if (type is GbaSaveType.Flash512k or GbaSaveType.Flash1M)
+            EnsureKnownFlash(link, type);
+
+        uint opcode = WriteOpcodeFor(type);
+        int block = WriteBlockSize(type);
+        int done = 0;
+
+        while (done < size)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            int length = Math.Min(block, size - done);
+
+            link.WriteSaveMemory(
+                CartridgeKind.GameBoyAdvance, opcode, (uint)done,
+                data.AsSpan(done, length));
+
+            done += length;
+            progress?.Report(new DumpProgress($"セーブ書き込み ({DisplayName(type)})", done, size));
+        }
+
+        progress?.Report(new DumpProgress("書き込んだ内容を照合中", 0, size));
+
+        var readBack = Read(link, type, progress, cancellationToken);
+
+        for (int i = 0; i < size; i++)
+            if (readBack[i] != data[i])
+                throw new RfcaException(
+                    $"照合に失敗しました。{i:X5} 番地は 0x{data[i]:X2} を書いたはずですが " +
+                    $"0x{readBack[i]:X2} が読めました。" +
+                    "カートリッジのセーブデータが中途半端な状態になっている可能性があります。");
+    }
+
+    /// <summary>
+    /// 知らないフラッシュに書かない。
+    ///
+    /// 石ごとに書き込み手順が違うため、対応表に無い ID のものへ書くと
+    /// 書けたように見えて壊れることがある。ID は参照実装の対応表に合わせた。
+    /// </summary>
+    private static void EnsureKnownFlash(IRfcaLink link, GbaSaveType type)
+    {
+        int id = link.ReadGbaFlashId();
+
+        bool known = type == GbaSaveType.Flash512k
+            ? id is 0x1B32 or 0x3D1F or 0xD4BF
+            : id is 0x09C2 or 0x1362;
+
+        if (!known)
+            throw new RfcaException(
+                $"対応していないフラッシュです (ID 0x{id:X4})。" +
+                "書き込むと壊すおそれがあるため中止しました。吸い出しは行えます。");
+    }
+
+    private static uint ReadOpcodeFor(GbaSaveType type) => type switch
+    {
+        GbaSaveType.Sram or GbaSaveType.Fram => RfcaOpcode.GbaSramRead,
+        GbaSaveType.Eeprom4k or GbaSaveType.Eeprom64k => RfcaOpcode.GbaEepromRead,
+        GbaSaveType.Flash512k or GbaSaveType.Flash1M => RfcaOpcode.GbaFlashRead,
+        _ => throw new RfcaException("セーブ装置の種類が分かりません。"),
+    };
+
+    private static uint WriteOpcodeFor(GbaSaveType type) => type switch
+    {
+        GbaSaveType.Sram or GbaSaveType.Fram => RfcaOpcode.GbaSramWrite,
+        GbaSaveType.Eeprom4k or GbaSaveType.Eeprom64k => RfcaOpcode.GbaEepromWrite,
+        GbaSaveType.Flash512k or GbaSaveType.Flash1M => RfcaOpcode.GbaFlashWrite,
+        _ => throw new RfcaException("セーブ装置の種類が分かりません。"),
+    };
+
+    /// <summary>読み出しは一括でよい。</summary>
+    private static int ReadBlockSize(GbaSaveType type) => SizeOf(type);
+
+    /// <summary>
+    /// 書き込みの単位。参照実装に合わせる。
+    /// EEPROM は 512 バイト、フラッシュは 4KB ごと。SRAM/FRAM は一括。
+    /// </summary>
+    private static int WriteBlockSize(GbaSaveType type) => type switch
+    {
+        GbaSaveType.Eeprom4k or GbaSaveType.Eeprom64k => 512,
+        GbaSaveType.Flash512k or GbaSaveType.Flash1M => 4096,
+        _ => SizeOf(type),
+    };
+}

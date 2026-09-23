@@ -106,6 +106,13 @@ public static class RfcaOpcode
     public const uint GbaEepromRead = 0x24;
     public const uint GbaEepromWrite = 0x25;
 
+    /// <summary>
+    /// フラッシュのメーカー ID / デバイス ID を 2 バイト返す。
+    /// 要求は 12 バイトで、ヘッダ欄は 0x00、サイズ欄は 2。
+    /// 書き込む前に、対応している石かを確かめるために使う。
+    /// </summary>
+    public const uint GbaFlashId = 0x26;
+
     /// <summary>GBA フラッシュ リード／ライト。</summary>
     public const uint GbaFlashRead = 0x27;
     public const uint GbaFlashWrite = 0x28;

@@ -566,6 +566,52 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
         return buf;
     }
 
+    /// <summary>
+    /// GBA フラッシュのメーカー ID / デバイス ID を読む。取得できなければ -1。
+    ///
+    /// 要求は 12 バイトで、ヘッダ欄は 0、サイズ欄は 2。
+    /// リード／ライトの 20 バイトとは形が違うので専用に組み立てる。
+    /// 応答の受け取り方はリードと同じ（ACK → 状態要求で催促 → 本体 → 末尾）。
+    ///
+    /// フラッシュへ書く前に、対応している石かを確かめるために使う。
+    /// 知らない ID の石に書くと、書けたように見えて壊れることがある。
+    /// </summary>
+    public int ReadGbaFlashId()
+    {
+        EnsureAwake();
+
+        lock (_gate)
+        {
+            DrainInput();
+
+            var req = new byte[12];
+            BinaryPrimitives.WriteUInt32LittleEndian(req.AsSpan(0), RfcaOpcode.GbaFlashId);
+            BinaryPrimitives.WriteUInt32LittleEndian(req.AsSpan(4), 0);
+            BinaryPrimitives.WriteUInt32LittleEndian(req.AsSpan(8), 2);
+
+            _port.Write(req, 0, req.Length);
+            Trace?.Invoke("TX op=0x26 (GBA フラッシュ ID)");
+
+            Span<byte> ack = stackalloc byte[8];
+            if (TryReadExact(ack, AckTimeout) != 8) return -1;
+
+            if (BinaryPrimitives.ReadUInt32LittleEndian(ack) != 0
+                || BinaryPrimitives.ReadUInt32LittleEndian(ack[4..]) != 2)
+                return -1;
+
+            _port.Write(StatusRequest, 0, StatusRequest.Length);
+
+            Span<byte> id = stackalloc byte[2];
+            if (TryReadExact(id, TimeSpan.FromMilliseconds(600)) != 2) return -1;
+
+            Span<byte> trailing = stackalloc byte[12];
+            TryReadExact(trailing, TimeSpan.FromMilliseconds(500));
+            DrainInput();
+
+            return id[0] | (id[1] << 8);
+        }
+    }
+
     /// <summary>リード結果を呼び出し側のバッファに直接書き込むオーバーロード。</summary>
     public void Read(uint opcode, uint address, Span<byte> destination, uint headerField = 0x08)
     {
@@ -735,6 +781,40 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// <exception cref="RfcaWriteBlockedException">
     /// 範囲外のアドレス、または <see cref="AllowBankSwitching"/> が false のとき。
     /// </exception>
+    /// <summary>
+    /// セーブデータの書き込みを許可するか。既定は false。
+    /// 利用者が明示的に有効にしたときだけ true になる。
+    /// </summary>
+    public bool AllowSaveWrites { get; set; }
+
+    /// <summary>
+    /// セーブ領域へ書く。
+    ///
+    /// 許可と宛先の両方を見る。どちらか一方でも欠けたら、
+    /// **要求フレームを組み立てる前に**弾く。シリアルポートには 1 バイトも出ない。
+    /// </summary>
+    public void WriteSaveMemory(CartridgeKind kind, uint opcode, uint address, ReadOnlySpan<byte> data)
+    {
+        if (data.Length == 0) return;
+
+        if (!AllowSaveWrites)
+            throw new RfcaWriteBlockedException(
+                "セーブデータの書き込みが許可されていません。" +
+                $"opcode 0x{opcode:X2} アドレス 0x{address:X6} への " +
+                $"{data.Length} バイトの書き込みを中止しました。");
+
+        if (!SaveMemory.IsSaveWrite(kind, opcode, address))
+            throw new RfcaWriteBlockedException(
+                $"{kind.ToDisplayName()} の opcode 0x{opcode:X2} アドレス 0x{address:X6} は " +
+                "セーブデータの領域ではありません。書き込みを中止しました。");
+
+        Trace?.Invoke(
+            $"セーブ書き込み: op=0x{opcode:X2} addr=0x{address:X6} " +
+            $"{data.Length} バイト ({kind.ToDisplayName()})");
+
+        WriteCore(opcode, address, data);
+    }
+
     public void WriteBankRegister(CartridgeKind kind, uint opcode, uint address, byte value,
                                   uint headerField = 0x08)
     {

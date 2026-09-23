@@ -64,6 +64,8 @@ public partial class MainWindow : Window
         if (AppVersion is { Length: > 0 } version)
             Title = $"{Title}  {version}";
 
+        InitializeGbaSaveTypes();
+
         DetailsGrid.ItemsSource = _details;
         WarningsList.ItemsSource = _warnings;
 
@@ -431,6 +433,10 @@ public partial class MainWindow : Window
 
             if (result.ChecksumOk is bool ok)
                 Log($"チェックサム検証: {(ok ? "一致" : "不一致")} — {result.ChecksumDetail}");
+
+            // GBA はセーブ装置の種類を ROM の中の目印から判定するので、
+            // 読めたものを覚えておく。もう一度読ませずに済む。
+            if (info.Kind == CartridgeKind.GameBoyAdvance) _lastGbaRom = result.Rom;
 
             // 照合してからファイル名を決める。
             var identified = ReportNoIntroMatch(result.Rom, result.Crc32);
@@ -888,6 +894,263 @@ public partial class MainWindow : Window
     // 共通
     // ==================================================================
 
+    /// <summary>吸い出し済みの GBA の ROM。セーブ装置の判定に使う。</summary>
+    private byte[]? _lastGbaRom;
+
+    /// <summary>「自動」に続けて、種類を手で選べるようにしておく。</summary>
+    private static readonly GbaSaveType[] GbaSaveTypeOrder =
+    [
+        GbaSaveType.None,           // 0 番は「自動」
+        GbaSaveType.Sram, GbaSaveType.Fram,
+        GbaSaveType.Eeprom4k, GbaSaveType.Eeprom64k,
+        GbaSaveType.Flash512k, GbaSaveType.Flash1M,
+    ];
+
+    private void InitializeGbaSaveTypes()
+    {
+        GbaSaveTypeCombo.Items.Add("自動（ROM の目印から判定）");
+
+        foreach (var type in GbaSaveTypeOrder[1..])
+            GbaSaveTypeCombo.Items.Add(GbaSave.DisplayName(type));
+
+        GbaSaveTypeCombo.SelectedIndex = 0;
+    }
+
+    private void GbaSaveWriteAllow_Changed(object sender, RoutedEventArgs e)
+    {
+        bool allow = GbaSaveWriteAllowCheck.IsChecked == true;
+
+        if (_link is not null) _link.AllowSaveWrites = allow;
+
+        GbaSaveWriteButton.IsEnabled = allow && _link is not null;
+
+        Log(allow
+            ? "セーブデータの書き込みを許可しました。ROM 領域には書き込めません。"
+            : "セーブデータの書き込みを禁止しました。");
+    }
+
+    /// <summary>
+    /// セーブ装置の種類を決める。
+    ///
+    /// 「自動」のときは ROM の中の目印を探す。GBA は種類をヘッダで申告しないため、
+    /// これ以外に知る方法がない。吸い出し済みの ROM があればそれを使い、
+    /// 無ければ読んでから判定する。
+    /// </summary>
+    private async Task<GbaSaveType> ResolveGbaSaveTypeAsync()
+    {
+        int index = GbaSaveTypeCombo.SelectedIndex;
+
+        if (index > 0) return GbaSaveTypeOrder[index];
+
+        if (_lastGbaRom is null)
+        {
+            if (_link is null || _info is null || _activeDumper is null)
+            {
+                Log("先に「カセットを識別」を押してください。");
+                return GbaSaveType.None;
+            }
+
+            Log("セーブ装置を判定するため、先に ROM を読みます。");
+
+            var link = _link;
+            var info = _info;
+            var dumper = _activeDumper;
+            var options = BuildOptions() ?? new DumpOptions();
+            var token = _cts?.Token ?? CancellationToken.None;
+
+            var romProgress = new Progress<DumpProgress>(p =>
+            {
+                DumpProgressBar.Value = p.Ratio;
+                ProgressText.Text = $"{p.Stage}  {p.Ratio:P1}";
+            });
+
+            var result = await Task.Run(() => dumper.Dump(link, info, options, romProgress, token));
+
+            _lastGbaRom = result.Rom;
+        }
+
+        var detected = GbaSave.Detect(_lastGbaRom);
+
+        Log(detected == GbaSaveType.None
+            ? "ROM に目印が見つかりませんでした。セーブしないソフトか、独自の方式です。手で指定してください。"
+            : $"セーブ装置を判定しました: {GbaSave.DisplayName(detected)}");
+
+        return detected;
+    }
+
+    private async void GbaSaveRead_Click(object sender, RoutedEventArgs e)
+    {
+        if (_link is null) return;
+
+        _cts = new CancellationTokenSource();
+        SetBusy(true);
+        CancelButton.IsEnabled = true;
+
+        try
+        {
+            var type = await ResolveGbaSaveTypeAsync();
+            if (type == GbaSaveType.None) return;
+
+            var progress = new Progress<DumpProgress>(p =>
+            {
+                DumpProgressBar.Value = p.Ratio;
+                ProgressText.Text = $"{p.Stage}  {FormatBytes(p.BytesDone)} / {FormatBytes(p.BytesTotal)}";
+            });
+
+            var link = _link;
+            var token = _cts.Token;
+
+            Log($"セーブを吸い出します: {GbaSave.DisplayName(type)}");
+
+            byte[] save = await Task.Run(() => GbaSave.Read(link, type, progress, token));
+
+            var dialog = new SaveFileDialog
+            {
+                Title = "セーブデータの保存先",
+                FileName = FileNaming.MakeRomFileName(_info?.Title, ".sav"),
+                Filter = "セーブデータ (*.sav)|*.sav|すべてのファイル (*.*)|*.*",
+                AddExtension = true,
+                DefaultExt = "sav",
+            };
+
+            if (dialog.ShowDialog(this) != true)
+            {
+                Log("保存を中止しました。");
+                return;
+            }
+
+            await File.WriteAllBytesAsync(dialog.FileName, save);
+
+            Log($"セーブを保存しました: {dialog.FileName} ({FormatBytes(save.Length)})");
+            ProgressText.Text = "セーブの吸い出し完了";
+        }
+        catch (OperationCanceledException)
+        {
+            Log("セーブの吸い出しを中止しました。");
+        }
+        catch (Exception ex)
+        {
+            Log($"セーブの吸い出しに失敗しました: {ex.Message}");
+            MessageBox.Show(this, ex.Message, "セーブの吸い出し",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _cts?.Dispose();
+            _cts = null;
+            CancelButton.IsEnabled = false;
+            SetBusy(false);
+        }
+    }
+
+    private async void GbaSaveWrite_Click(object sender, RoutedEventArgs e)
+    {
+        if (_link is null) return;
+
+        if (GbaSaveWriteAllowCheck.IsChecked != true)
+        {
+            Log("セーブデータの書き込みが許可されていません。");
+            return;
+        }
+
+        _cts = new CancellationTokenSource();
+        SetBusy(true);
+        CancelButton.IsEnabled = true;
+
+        try
+        {
+            var type = await ResolveGbaSaveTypeAsync();
+            if (type == GbaSaveType.None) return;
+
+            int size = GbaSave.SizeOf(type);
+
+            var open = new OpenFileDialog
+            {
+                Title = "書き込むセーブデータ",
+                Filter = "セーブデータ (*.sav)|*.sav|すべてのファイル (*.*)|*.*",
+            };
+
+            if (open.ShowDialog(this) != true)
+            {
+                Log("書き込みを中止しました。");
+                return;
+            }
+
+            byte[] data = await File.ReadAllBytesAsync(open.FileName);
+
+            if (data.Length != size)
+            {
+                string message =
+                    $"ファイルの大きさが {GbaSave.DisplayName(type)} と合いません。\n\n" +
+                    $"必要: {size} バイト\n選んだファイル: {data.Length} バイト";
+
+                Log(message.Replace("\n", " "));
+                MessageBox.Show(this, message, "セーブの書き込み",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var link = _link;
+            var token = _cts.Token;
+
+            // 上書きする前に、今カートリッジに入っているものを控えに残す。
+            // 取り違えて書いたとき、元に戻せる手立てがこれしかない。
+            Log("上書きする前に、現在のセーブを控えに残します。");
+
+            byte[] backup = await Task.Run(() => GbaSave.Read(link, type, null, token));
+
+            string backupPath = Path.Combine(
+                Path.GetDirectoryName(Environment.ProcessPath) ?? Directory.GetCurrentDirectory(),
+                $"gba-save-backup-{DateTime.Now:yyyyMMdd-HHmmss}.sav");
+
+            await File.WriteAllBytesAsync(backupPath, backup);
+            Log($"控えを保存しました: {backupPath}");
+
+            var confirm = MessageBox.Show(this,
+                "カートリッジのセーブデータを上書きします。\n\n" +
+                $"装置: {GbaSave.DisplayName(type)}\n" +
+                $"書き込むファイル: {Path.GetFileName(open.FileName)}\n" +
+                $"大きさ: {size} バイト\n\n" +
+                $"現在のセーブは次の場所に控えてあります。\n{backupPath}\n\n" +
+                "書き込みを実行しますか？",
+                "セーブの書き込み", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+            if (confirm != MessageBoxResult.Yes)
+            {
+                Log("書き込みを中止しました。");
+                return;
+            }
+
+            var progress = new Progress<DumpProgress>(p =>
+            {
+                DumpProgressBar.Value = p.Ratio;
+                ProgressText.Text = $"{p.Stage}  {FormatBytes(p.BytesDone)} / {FormatBytes(p.BytesTotal)}";
+            });
+
+            await Task.Run(() => GbaSave.Write(link, type, data, progress, token));
+
+            Log("セーブを書き込み、読み戻して一致を確認しました。");
+            ProgressText.Text = "セーブの書き込み完了";
+        }
+        catch (OperationCanceledException)
+        {
+            Log("セーブの書き込みを中止しました。");
+        }
+        catch (Exception ex)
+        {
+            Log($"セーブの書き込みに失敗しました: {ex.Message}");
+            MessageBox.Show(this, ex.Message, "セーブの書き込み",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _cts?.Dispose();
+            _cts = null;
+            CancelButton.IsEnabled = false;
+            SetBusy(false);
+        }
+    }
+
     private void SetBusy(bool busy)
     {
         bool live = !busy && _link is not null;
@@ -900,6 +1163,9 @@ public partial class MainWindow : Window
         SlotComparisonButton.IsEnabled = live;
         NesWriteProbeButton.IsEnabled = live;
         GbaHeadSampleButton.IsEnabled = live;
+        GbaSaveReadButton.IsEnabled = live;
+        GbaSaveWriteAllowCheck.IsEnabled = live;
+        GbaSaveWriteButton.IsEnabled = live && GbaSaveWriteAllowCheck.IsChecked == true;
         AutoDetectPortButton.IsEnabled = !busy && _link is null;
 
         Cursor = busy ? Cursors.Wait : null;

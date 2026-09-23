@@ -26,6 +26,23 @@ public sealed class FakeGbCartridge : IRfcaLink
 
     public bool AllowWrites { get; set; }
 
+    public bool AllowSaveWrites { get; set; }
+
+    /// <summary>検証用: セーブ領域への書き込み。</summary>
+    public List<(uint Opcode, uint Address, byte[] Data)> SaveWrites { get; } = [];
+
+    public void WriteSaveMemory(CartridgeKind kind, uint opcode, uint address, ReadOnlySpan<byte> data)
+    {
+        if (!AllowSaveWrites)
+            throw new RfcaWriteBlockedException("セーブデータの書き込みが許可されていません");
+
+        if (!SaveMemory.IsSaveWrite(kind, opcode, address))
+            throw new RfcaWriteBlockedException(
+                $"opcode 0x{opcode:X2} アドレス 0x{address:X6} はセーブデータの領域ではありません");
+
+        SaveWrites.Add((opcode, address, data.ToArray()));
+    }
+
     /// <summary>検証用: バンク切り替えレジスタへの書き込み。</summary>
     public List<(uint Address, byte Value)> BankRegisterWrites { get; } = [];
 

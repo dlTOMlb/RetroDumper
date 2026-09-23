@@ -36,6 +36,28 @@ public interface IRfcaLink
                        uint headerField = 0x08);
 
     /// <summary>
+    /// セーブデータの書き込みを許可するか。既定は false。
+    ///
+    /// 「GBA には絶対に書き込まない」という条件を、利用者の判断で
+    /// 「セーブ領域だけは書いてよい」に緩めるための唯一の入口。
+    /// true にしても、<see cref="SaveMemory.IsSaveWrite"/> が認めた宛先にしか通らない。
+    /// ROM 領域へは、この値に関わらず書き込めない。
+    /// </summary>
+    bool AllowSaveWrites { get; set; }
+
+    /// <summary>
+    /// セーブ領域へ書く。<see cref="AllowSaveWrites"/> と
+    /// <see cref="SaveMemory.IsSaveWrite"/> の両方を満たすときだけ通る。
+    /// </summary>
+    void WriteSaveMemory(CartridgeKind kind, uint opcode, uint address, ReadOnlySpan<byte> data);
+
+    /// <summary>
+    /// GBA フラッシュの ID を読む。取得できなければ -1。
+    /// シミュレータは実装しなくてよい。
+    /// </summary>
+    int ReadGbaFlashId() => -1;
+
+    /// <summary>
     /// バンク切り替えレジスタへ 1 バイト書く。書き込み保護下でも通る。
     /// 対象は <see cref="MapperRegister.IsBankRegister"/> が認める範囲だけで、
     /// GBA は含まれない。
