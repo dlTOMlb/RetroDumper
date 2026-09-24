@@ -37,6 +37,7 @@ internal static class Program
                 "wfill" => WriteFill(port, args),
                 "wmark" => WriteMarked(port, args),
                 "wtrick" => WriteTrick(port, args),
+                "savetype" => SaveType(port),
                 _ => Usage(),
             };
         }
@@ -52,6 +53,7 @@ internal static class Program
         Console.WriteLine("""
             使い方: rfcalab <コマンド> [ポート] [引数]
 
+              savetype [COM3]               ROM を読んでセーブ装置の種類を調べる（読むだけ）
               probe  [COM3]                 状態と EEPROM の読み出し安定性を見る（読むだけ）
               dump   [COM3] [out.bin]       EEPROM を読んでファイルに保存（読むだけ）
               wblock [COM3] <位置> <16進16桁> 8 バイトだけ書いて読み戻す（**書き込む**）
@@ -318,6 +320,42 @@ internal static class Program
         Console.WriteLine(got.SequenceEqual(want) ? "  → 一致しました" : "  → 一致しません");
 
         return got.SequenceEqual(want) ? 0 : 3;
+    }
+
+    /// <summary>
+    /// ROM を読んで、セーブ装置の種類を調べる。読むだけ。
+    ///
+    /// GBA はセーブ装置の種類をヘッダで申告しないので、
+    /// ROM の中に残る目印（SRAM_V / FLASH1M_V など）から判定する。
+    /// どの種類がまだ実機で確かめられていないかを調べるのに使う。
+    /// </summary>
+    private static int SaveType(string port)
+    {
+        using var link = Open(port);
+
+        var dumper = new RetroDumper.Core.Gba.GbaDumper();
+        var options = new RetroDumper.Core.Dumping.DumpOptions();
+        var info = dumper.Identify(link, options);
+
+        Console.WriteLine($"タイトル: {info.Title}");
+        Console.WriteLine($"ROM: {info.RomSize / 1024 / 1024} MB");
+        Console.WriteLine("ROM を読んでいます…");
+
+        var result = dumper.Dump(link, info, options, null, CancellationToken.None);
+        var type = GbaSave.Detect(result.Rom);
+
+        Console.WriteLine($"セーブ装置: {GbaSave.DisplayName(type)}");
+
+        if (GbaSave.AlternateEeprom(type) is not null)
+        {
+            var probe = GbaSave.ProbeEepromSize(link, type);
+
+            Console.WriteLine($"  容量の判定: {GbaSave.DisplayName(probe.Type)}"
+                + (probe.Determined ? "" : "（決められず）"));
+            Console.WriteLine($"  根拠: {probe.Reason}");
+        }
+
+        return 0;
     }
 
     private static bool AllSame(byte[] data)
