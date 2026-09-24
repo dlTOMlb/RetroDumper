@@ -954,11 +954,28 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
             if (got == 8 && !IsAllZero(ack))
                 Trace?.Invoke($"WARN: ライト要求 ACK が非ゼロ {Convert.ToHexString(ack)}");
 
-            // データ本体送信
-            _port.Write(data.ToArray(), 0, data.Length);
+            // データ本体送信。
+            //
+            // **書き込みは読み出しより待たされる。**
+            // フラッシュは 1 区画ごとに消去と書き込みを行うため、
+            // アダプタが受け取りを絞る。既定の 1 秒では
+            // 4KB を送り切る前にポートがタイムアウトする（実機で発生）。
+            // 送る量に見合った待ち時間にして、終わったら戻す。
+            int previousWriteTimeout = _port.WriteTimeout;
 
+            try
+            {
+                _port.WriteTimeout = (int)WriteTimeoutFor(data.Length).TotalMilliseconds;
+                _port.Write(data.ToArray(), 0, data.Length);
+            }
+            finally
+            {
+                _port.WriteTimeout = previousWriteTimeout;
+            }
+
+            // 書き込みの完了応答も同じ理由で待つ。
             Span<byte> ack2 = stackalloc byte[8];
-            int got2 = TryReadExact(ack2, TimeSpan.FromMilliseconds(600));
+            int got2 = TryReadExact(ack2, WriteTimeoutFor(data.Length));
             if (got2 == 0)
                 throw new RfcaTimeoutException(
                     $"addr 0x{address:X6} へのデータ書き込みに応答がありません");
@@ -1023,6 +1040,15 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
         _port.Write(req, 0, req.Length);
         Trace?.Invoke($"TX op=0x{opcode:X2} addr=0x{address:X6} size={size}");
     }
+
+    /// <summary>
+    /// 書き込みに見合った待ち時間。
+    ///
+    /// フラッシュの消去と書き込みは 1 区画あたり数十〜数百ミリ秒かかる。
+    /// 転送そのものの時間に、その分の余裕を足しておく。
+    /// </summary>
+    private static TimeSpan WriteTimeoutFor(int bytes)
+        => TimeSpan.FromMilliseconds(10_000 + bytes * 1000.0 / 11000.0);
 
     /// <summary>転送サイズに見合ったタイムアウト。115200bps ≒ 11.5KB/s。</summary>
     private static TimeSpan EstimateTransferTimeout(int bytes)

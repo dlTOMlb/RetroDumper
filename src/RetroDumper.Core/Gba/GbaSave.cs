@@ -290,7 +290,31 @@ public static class GbaSave
         }
 
         if (type is GbaSaveType.Flash512k or GbaSaveType.Flash1M)
+        {
+            // **フラッシュへの書き込みは行わない。**
+            //
+            // 2026-09-24、ポケモン エメラルド（Sanyo 0x1362、128KB）で試したところ、
+            // 4096 バイトの書き込みでポートがタイムアウトし、
+            // 再試行するとアダプタが USB から消えた（COM ポートが無くなる）。
+            // 抜き差ししないと復帰しない。
+            //
+            // 幸いセーブは無傷だった（書き込みの前後で控えが完全に一致）。
+            // 届く前に止まっていたためで、たまたま助かったにすぎない。
+            //
+            // フラッシュは消去と書き込みを伴うぶん、他の装置より重い。
+            // 何が過負荷なのかを掴めていない状態で利用者のセーブを賭けられない。
+            // 吸い出しは問題なく行える。
+            throw new RfcaException(
+                "フラッシュへの書き込みは行いません。" + Environment.NewLine +
+                "2026-09-24 の実機確認で、書き込み中にアダプタが USB から" +
+                "切り離される現象が起きました。原因が分かるまで塞いでいます。" +
+                Environment.NewLine +
+                "セーブの吸い出しは行えます。");
+
+#pragma warning disable CS0162 // 到達不能。封鎖を解いたときに使う。
             EnsureKnownFlash(link, type);
+#pragma warning restore CS0162
+        }
 
         if (type == GbaSaveType.Eeprom4k)
         {
@@ -389,17 +413,38 @@ public static class GbaSave
     /// </summary>
     private static void EnsureKnownFlash(IRfcaLink link, GbaSaveType type)
     {
-        int id = link.ReadGbaFlashId();
+        // ID の読み出しは取りこぼすことがある。
+        //
+        // ポケモン エメラルド（Sanyo 0x1362）を 5 回読んだところ、
+        // 0x1362 と 0x6262 が交互に出た。0x6262 は 2 バイト目が
+        // 1 バイト目（メーカー番号 0x62）の繰り返しになったもので、
+        // 石が変わったのではなく読み取りの取りこぼし。
+        // 1 回で決めると、対応している石を弾いてしまう。
+        var seen = new List<int>();
 
-        bool known = type == GbaSaveType.Flash512k
-            ? id is 0x1B32 or 0x3D1F or 0xD4BF
-            : id is 0x09C2 or 0x1362;
+        for (int attempt = 0; attempt < FlashIdAttempts; attempt++)
+        {
+            int id = link.ReadGbaFlashId();
+            seen.Add(id);
 
-        if (!known)
-            throw new RfcaException(
-                $"対応していないフラッシュです (ID 0x{id:X4})。" +
-                "書き込むと壊すおそれがあるため中止しました。吸い出しは行えます。");
+            if (IsKnownFlash(type, id)) return;
+        }
+
+        throw new RfcaException(
+            $"対応していないフラッシュです (ID {string.Join(" / ", seen.Select(v => $"0x{v:X4}"))})。" +
+            "書き込むと壊すおそれがあるため中止しました。吸い出しは行えます。");
     }
+
+    /// <summary>ID の読み直し回数。取りこぼしても既知の値が出れば認める。</summary>
+    private const int FlashIdAttempts = 5;
+
+    /// <summary>対応表にある石か。値は参照実装の対応表に合わせた。</summary>
+    private static bool IsKnownFlash(GbaSaveType type, int id) => type switch
+    {
+        GbaSaveType.Flash512k => id is 0x1B32 or 0x3D1F or 0xD4BF,
+        GbaSaveType.Flash1M => id is 0x09C2 or 0x1362,
+        _ => false,
+    };
 
     /// <summary>EEPROM の 1 ブロック。GBA の EEPROM は 64 ビット単位で読み書きする。</summary>
     private const int EepromBlockSize = 8;

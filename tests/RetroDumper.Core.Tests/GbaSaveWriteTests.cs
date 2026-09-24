@@ -250,16 +250,39 @@ public sealed class GbaSaveWriteTests
         Assert.Throws<RfcaException>(() => GbaSave.Write(cart, GbaSaveType.None, []));
     }
 
-    /// <summary>フラッシュは 4KB ずつ書く。</summary>
-    [Fact]
-    public void フラッシュは分割して書いても内容が変わらない()
+    /// <summary>
+    /// **フラッシュへの書き込みは行わない。**
+    ///
+    /// 2026-09-24、ポケモン エメラルド（Sanyo 0x1362、128KB）で試したところ、
+    /// 4096 バイトの書き込みでポートがタイムアウトし、再試行すると
+    /// アダプタが USB から消えた。抜き差ししないと復帰しない。
+    /// 何が過負荷なのかを掴めていないので塞いでいる。吸い出しは行える。
+    ///
+    /// 直したと思ったら、このテストを消す前に実機で確かめること。
+    /// </summary>
+    [Theory]
+    [InlineData(GbaSaveType.Flash512k, 65536)]
+    [InlineData(GbaSaveType.Flash1M, 131072)]
+    public void フラッシュには書き込まない(GbaSaveType type, int size)
     {
-        var cart = new FakeGbaSaveCartridge(65536) { AllowSaveWrites = true };
-        var data = Pattern(65536);
+        var cart = new FakeGbaSaveCartridge(size) { AllowSaveWrites = true };
+        var before = cart.Snapshot();
 
-        GbaSave.Write(cart, GbaSaveType.Flash512k, data);
+        var error = Assert.Throws<RfcaException>(
+            () => GbaSave.Write(cart, type, Pattern(size)));
 
-        Assert.Equal(data, cart.Snapshot());
+        Assert.Contains("フラッシュへの書き込みは行いません", error.Message);
+        Assert.Equal(before, cart.Snapshot());
+    }
+
+    /// <summary>塞いでいるのは書き込みだけ。吸い出しは行えること。</summary>
+    [Fact]
+    public void フラッシュも吸い出しは行える()
+    {
+        var cart = new FakeGbaSaveCartridge(65536);
+        cart.Preset(Pattern(65536));
+
+        Assert.Equal(Pattern(65536), GbaSave.Read(cart, GbaSaveType.Flash512k));
     }
 }
 

@@ -38,12 +38,15 @@ internal static class Program
                 "wmark" => WriteMarked(port, args),
                 "wtrick" => WriteTrick(port, args),
                 "savetype" => SaveType(port),
+                "savetest" => SaveTest(port, args),
+                "flashid" => FlashId(port),
                 _ => Usage(),
             };
         }
         catch (Exception ex)
         {
             Console.WriteLine($"失敗: {ex.GetType().Name}: {ex.Message}");
+            Console.WriteLine(ex.StackTrace);
             return 2;
         }
     }
@@ -54,6 +57,7 @@ internal static class Program
             使い方: rfcalab <コマンド> [ポート] [引数]
 
               savetype [COM3]               ROM を読んでセーブ装置の種類を調べる（読むだけ）
+              savetest [COM3] [控えの保存先]  吸い出し→同じ内容を書き戻し→照合（**書き込む**）
               probe  [COM3]                 状態と EEPROM の読み出し安定性を見る（読むだけ）
               dump   [COM3] [out.bin]       EEPROM を読んでファイルに保存（読むだけ）
               wblock [COM3] <位置> <16進16桁> 8 バイトだけ書いて読み戻す（**書き込む**）
@@ -102,7 +106,7 @@ internal static class Program
     {
         using var link = Open(port);
 
-        var data = GbaSave.Read(link, GbaSaveType.Eeprom4k);
+        var data = GbaSave.Read(link, DetectType(link));
         File.WriteAllBytes(path, data);
 
         Console.WriteLine($"{data.Length} バイトを {path} に保存しました。");
@@ -175,7 +179,15 @@ internal static class Program
         using var link = Open(port);
         link.AllowSaveWrites = true;
 
-        var type = data.Length == 512 ? GbaSaveType.Eeprom4k : GbaSaveType.Eeprom64k;
+        var type = args.Contains("--flash1m") ? GbaSaveType.Flash1M : DetectType(link);
+
+        if (data.Length != GbaSave.SizeOf(type))
+        {
+            Console.WriteLine(
+                $"ファイルは {data.Length} バイトですが、"
+                + $"{GbaSave.DisplayName(type)} は {GbaSave.SizeOf(type)} バイトです。");
+            return 3;
+        }
 
         GbaSave.Write(link, type, data);
 
@@ -354,6 +366,155 @@ internal static class Program
                 + (probe.Determined ? "" : "（決められず）"));
             Console.WriteLine($"  根拠: {probe.Reason}");
         }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// セーブの読み書きを一通り確かめる。
+    ///
+    ///   1. ROM を読んでセーブ装置の種類を判定する
+    ///   2. セーブを吸い出してファイルに残す（これが控えになる）
+    ///   3. **同じ内容を書き戻す**
+    ///   4. 読み戻して、吸い出したものと 1 バイトずつ突き合わせる
+    ///
+    /// 同じ内容を書き戻すので、成功すればカセットの中身は変わらない。
+    /// 失敗しても手順 2 の控えが残る。
+    /// </summary>
+    private static int SaveTest(string port, string[] args)
+    {
+        string backupPath = args.Length > 2
+            ? args[2]
+            : $"save-{DateTime.Now:yyyyMMdd-HHmmss}.sav";
+
+        using var link = Open(port);
+
+        var dumper = new RetroDumper.Core.Gba.GbaDumper();
+        var options = new RetroDumper.Core.Dumping.DumpOptions();
+        var info = dumper.Identify(link, options);
+
+        Console.WriteLine($"タイトル: {info.Title} / ROM {info.RomSize / 1024 / 1024} MB");
+        Console.WriteLine("ROM を読んでセーブ装置を判定します…");
+
+        var rom = dumper.Dump(link, info, options, null, CancellationToken.None).Rom;
+        var type = GbaSave.Detect(rom);
+
+        if (type == GbaSaveType.None)
+        {
+            Console.WriteLine("セーブ装置の目印が見つかりませんでした。");
+            return 3;
+        }
+
+        if (GbaSave.AlternateEeprom(type) is not null)
+        {
+            var probe = GbaSave.ProbeEepromSize(link, type);
+            Console.WriteLine($"  EEPROM の容量判定: {probe.Reason}");
+            type = probe.Type;
+        }
+
+        Console.WriteLine($"セーブ装置: {GbaSave.DisplayName(type)} ({GbaSave.SizeOf(type)} バイト)");
+
+        // --- 吸い出し
+        Console.WriteLine("セーブを吸い出します…");
+        var original = GbaSave.Read(link, type);
+
+        File.WriteAllBytes(backupPath, original);
+        Console.WriteLine($"  控えを {backupPath} に保存しました。");
+
+        // --- 読み出しが安定しているか
+        var (stable, differences) = GbaSave.CheckReadStability(link, type);
+
+        Console.WriteLine($"  読み出しの安定: {(stable ? "はい" : $"いいえ（{differences} バイト違う）")}");
+
+        if (!stable)
+        {
+            Console.WriteLine("読み出しが安定しないため、書き込みは行いません。");
+            return 4;
+        }
+
+        if (type is GbaSaveType.Flash512k or GbaSaveType.Flash1M)
+            Console.WriteLine($"  フラッシュ ID: 0x{link.ReadGbaFlashId():X4}");
+
+        if (args.Contains("--readonly"))
+        {
+            Console.WriteLine("読み出しのみで終了します（書き込みません）。");
+            return 0;
+        }
+
+        // --- 同じ内容を書き戻す
+        Console.WriteLine("同じ内容を書き戻します…");
+        link.AllowSaveWrites = true;
+
+        try
+        {
+            GbaSave.Write(link, type, original);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  失敗: {ex.Message}");
+            Console.WriteLine($"  控えは {backupPath} にあります。");
+            return 5;
+        }
+
+        // --- もう一度読んで突き合わせる
+        var after = GbaSave.Read(link, type);
+
+        int bad = 0;
+        int firstBad = -1;
+
+        for (int i = 0; i < original.Length; i++)
+            if (after[i] != original[i])
+            {
+                bad++;
+                if (firstBad < 0) firstBad = i;
+            }
+
+        if (bad == 0)
+        {
+            Console.WriteLine($"結果: 合格。{GbaSave.DisplayName(type)} の読み書きが通りました。");
+            return 0;
+        }
+
+        Console.WriteLine($"結果: 不合格。{bad} / {original.Length} バイトが違います。");
+        Console.WriteLine($"  最初の食い違い {firstBad:X5}: "
+            + $"書いた 0x{original[firstBad]:X2} / 読めた 0x{after[firstBad]:X2}");
+        Console.WriteLine($"  控えは {backupPath} にあります。");
+
+        return 6;
+    }
+
+    /// <summary>ROM を読んでセーブ装置の種類を決める。</summary>
+    private static GbaSaveType DetectType(RfcaLink link)
+    {
+        var dumper = new RetroDumper.Core.Gba.GbaDumper();
+        var options = new RetroDumper.Core.Dumping.DumpOptions();
+        var info = dumper.Identify(link, options);
+
+        var rom = dumper.Dump(link, info, options, null, CancellationToken.None).Rom;
+        var type = GbaSave.Detect(rom);
+
+        if (GbaSave.AlternateEeprom(type) is not null)
+            type = GbaSave.ProbeEepromSize(link, type).Type;
+
+        Console.WriteLine($"セーブ装置: {GbaSave.DisplayName(type)}");
+        return type;
+    }
+
+    /// <summary>フラッシュの ID を何度か読んで、安定しているかを見る。読むだけ。</summary>
+    private static int FlashId(string port)
+    {
+        using var link = Open(port);
+
+        for (int i = 0; i < 5; i++)
+        {
+            int id = link.ReadGbaFlashId();
+            Console.WriteLine($"  {i + 1} 回目: 0x{id:X4}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("参照実装が認めている ID:");
+        Console.WriteLine("  128KB: 0x09C2 (Macronix) / 0x1362 (Sanyo)");
+        Console.WriteLine("   64KB: 0x1B32 (Panasonic) / 0x3D1F (Atmel) / 0xD4BF (SST)");
 
         return 0;
     }
