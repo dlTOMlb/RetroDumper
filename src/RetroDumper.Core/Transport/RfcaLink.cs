@@ -354,12 +354,24 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
         return ack;
     }
 
+    /// <summary>
+    /// SFC・GBA 以外のスロットを有効にする。
+    ///
+    /// **0x2F を使うのは SFC だけ。**参照実装 (RetroFreakDumper) の
+    /// 各 Dumper.Initialize を見ると、GB / メガドライブ / ファミコン /
+    /// PC エンジン / マークIII は揃って 0x04(1) → 0x05 → 200ms 待ち、で、
+    /// 0x2F は送っていない。
+    ///
+    /// 以前はここでも 0x2F を送っていた。ゲームボーイでは**拒否され**、
+    /// スロットが有効にならないままセーブを読んで全 0xFF になっていた
+    /// （2026-09-24 ポケットモンスター ピカチュウで判明）。
+    /// </summary>
     private byte[] InitGenericSlot(uint param)
     {
-        // SFC と同じく 0x2F だけ。未検証の手順を混ぜない。
-        Trace?.Invoke($"スロットをウェイクアップします (0x2F param={param})");
+        Trace?.Invoke($"スロットを初期化します (0x04(1) → 0x05) [{(CartridgeKind)(byte)param}]");
 
-        var ack = SendControl(RfcaOpcode.SlotWakeup, address: 0, size: 0, parameter: param);
+        var ack = SendSlotSelect(1);
+        SendSlotCommit();
         Thread.Sleep(WakeSettleMilliseconds);
 
         return ack;

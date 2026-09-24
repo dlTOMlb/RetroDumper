@@ -1,3 +1,4 @@
+using RetroDumper.Core.Gb;
 using RetroDumper.Core.Gba;
 using RetroDumper.Core.Transport;
 
@@ -69,15 +70,19 @@ internal static class Program
         return 1;
     }
 
-    private static RfcaLink Open(string port)
+    private static RfcaLink Open(string port, CartridgeKind? require = CartridgeKind.GameBoyAdvance)
     {
         var link = new RfcaLink(port) { Trace = line => Console.WriteLine($"  [{line}]") };
 
         var status = link.GetStatus();
         Console.WriteLine($"ポート {port} / 種別 {status.Kind.ToDisplayName()}");
 
-        if (status.Kind != CartridgeKind.GameBoyAdvance)
-            throw new InvalidOperationException("GBA のカートリッジが挿さっていません。");
+        if (require is CartridgeKind kind && status.Kind != kind)
+            throw new InvalidOperationException(
+                $"{kind.ToDisplayName()} のカートリッジが挿さっていません。");
+
+        if (!status.Kind.IsConnected())
+            throw new InvalidOperationException("カートリッジが挿さっていません。");
 
         return link;
     }
@@ -393,6 +398,14 @@ internal static class Program
             ? args[2]
             : $"save-{DateTime.Now:yyyyMMdd-HHmmss}.sav";
 
+        CartridgeKind kind;
+
+        using (var peek = Open(port, require: null))
+            kind = peek.GetStatus().Kind;
+
+        if (kind == CartridgeKind.GameBoy)
+            return GbSaveTest(port, backupPath, args);
+
         using var link = Open(port);
 
         var dumper = new RetroDumper.Core.Gba.GbaDumper();
@@ -569,6 +582,98 @@ internal static class Program
 
         Console.WriteLine($"合計 {db.EntryCount} 件");
         return 0;
+    }
+
+    /// <summary>
+    /// ゲームボーイのセーブを一通り確かめる。
+    /// 吸い出し → 同じ内容を書き戻し → 読み戻して突き合わせ。
+    /// 同じ内容を書き戻すので、成功すればカセットの中身は変わらない。
+    /// </summary>
+    private static int GbSaveTest(string port, string backupPath, string[] args)
+    {
+        using var link = Open(port, CartridgeKind.GameBoy);
+
+        var dumper = new RetroDumper.Core.Gb.GbDumper();
+        var options = new RetroDumper.Core.Dumping.DumpOptions();
+        var info = dumper.Identify(link, options);
+
+        Console.WriteLine($"タイトル: {info.Title}");
+        Console.WriteLine($"MBC: {info.Mapper}（種別 0x{info.GbCartridgeType:X2}）");
+        Console.WriteLine($"ROM: {info.RomSize / 1024} KB");
+        Console.WriteLine($"セーブ: {info.SaveMemorySize} バイト");
+
+        if (info.GbCartridgeType is not byte cartType || info.SaveMemorySize <= 0)
+        {
+            Console.WriteLine("セーブ用の外部 RAM がありません。");
+            return 3;
+        }
+
+        Console.WriteLine("セーブを吸い出します…");
+
+        var original = GbSave.Read(link, cartType, info.SaveMemorySize);
+        File.WriteAllBytes(backupPath, original);
+
+        Console.WriteLine($"  控えを {backupPath} に保存しました。");
+        Console.WriteLine($"  先頭 16 バイト: {Convert.ToHexString(original.AsSpan(0, 16))}");
+
+        // 2 回読んで一致するかを見る。
+        var again = GbSave.Read(link, cartType, info.SaveMemorySize);
+        int jitter = 0;
+
+        for (int i = 0; i < original.Length; i++) if (original[i] != again[i]) jitter++;
+
+        Console.WriteLine($"  読み出しの安定: {(jitter == 0 ? "はい" : $"いいえ（{jitter} バイト違う）")}");
+
+        if (jitter != 0)
+        {
+            Console.WriteLine("読み出しが安定しないため、書き込みは行いません。");
+            return 4;
+        }
+
+        if (args.Contains("--readonly"))
+        {
+            Console.WriteLine("読み出しのみで終了します（書き込みません）。");
+            return 0;
+        }
+
+        Console.WriteLine("同じ内容を書き戻します…");
+        link.AllowSaveWrites = true;
+
+        try
+        {
+            GbSave.Write(link, cartType, original);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  失敗: {ex.Message}");
+            Console.WriteLine($"  控えは {backupPath} にあります。");
+            return 5;
+        }
+
+        var after = GbSave.Read(link, cartType, info.SaveMemorySize);
+
+        int bad = 0;
+        int firstBad = -1;
+
+        for (int i = 0; i < original.Length; i++)
+            if (after[i] != original[i])
+            {
+                bad++;
+                if (firstBad < 0) firstBad = i;
+            }
+
+        if (bad == 0)
+        {
+            Console.WriteLine($"結果: 合格。{info.Mapper} の読み書きが通りました。");
+            return 0;
+        }
+
+        Console.WriteLine($"結果: 不合格。{bad} / {original.Length} バイトが違います。");
+        Console.WriteLine($"  最初の食い違い {firstBad:X4}: "
+            + $"書いた 0x{original[firstBad]:X2} / 読めた 0x{after[firstBad]:X2}");
+        Console.WriteLine($"  控えは {backupPath} にあります。");
+
+        return 6;
     }
 
     private static bool AllSame(byte[] data)
