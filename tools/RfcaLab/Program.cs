@@ -42,6 +42,7 @@ internal static class Program
                 "savetest" => SaveTest(port, args),
                 "flashid" => FlashId(port),
                 "dbinfo" => DatabaseInfo(),
+                "gbhead" => GbHeader(port),
                 "wflash" => WriteFlash(port, args),
                 _ => Usage(),
             };
@@ -674,6 +675,59 @@ internal static class Program
         Console.WriteLine($"  控えは {backupPath} にあります。");
 
         return 6;
+    }
+
+    /// <summary>ゲームボーイのヘッダ ($0100-$014F) を生のまま見る。読むだけ。</summary>
+    private static int GbHeader(string port)
+    {
+        using var link = Open(port, CartridgeKind.GameBoy);
+
+        // ロゴがどこにあるかを探す。読む位置がずれていれば、ずれ幅が分かる。
+        var wide = link.Read(RfcaOpcode.GameBoyRead, 0x0000, 0x4000);
+        var logo = new byte[] { 0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B };
+        int at = wide.AsSpan().IndexOf(logo);
+
+        Console.WriteLine($"ロゴの位置: {(at < 0 ? "見つからない" : $"0x{at:X4}（本来は 0x0104）")}");
+        Console.WriteLine($"0x0000 から 16 バイト: {Convert.ToHexString(wide.AsSpan(0, 16))}");
+
+        if (at >= 0)
+        {
+            int baseAt = at - 0x104;
+            Console.WriteLine($"  ずれ幅: {at - 0x104:+#;-#;0} バイト");
+            if (baseAt + 0x150 <= wide.Length && baseAt >= 0)
+                Console.WriteLine($"  そこを基準にしたタイトル: " +
+                    System.Text.Encoding.ASCII.GetString(wide.AsSpan(baseAt + 0x134, 16)).Replace(' ', '.'));
+        }
+
+        // アドレス線が 1 本でも接触していないと、違う番地が同じ内容に見える。
+        Console.WriteLine();
+        Console.WriteLine("アドレス線の確認（同じ内容なら、その線が効いていない）:");
+
+        var baseline = link.Read(RfcaOpcode.GameBoyRead, 0x0000, 16);
+
+        for (int bit = 0; bit < 14; bit++)
+        {
+            uint address = 1u << bit;
+            var other = link.Read(RfcaOpcode.GameBoyRead, address, 16);
+            bool same = other.AsSpan().SequenceEqual(baseline);
+
+            Console.WriteLine($"  A{bit,-2} (0x{address:X4}): {(same ? "同じ ← 怪しい" : "違う")}");
+        }
+
+        Console.WriteLine();
+
+        for (int attempt = 1; attempt <= 1; attempt++)
+        {
+            var head = link.Read(RfcaOpcode.GameBoyRead, 0x0100, 0x50);
+
+            Console.WriteLine($"--- {attempt} 回目");
+            Console.WriteLine($"  タイトル欄 (0x134-0x143): {Convert.ToHexString(head.AsSpan(0x34, 16))}");
+            Console.WriteLine($"  文字として: {System.Text.Encoding.ASCII.GetString(head.AsSpan(0x34, 16)).Replace(' ', '.')}");
+            Console.WriteLine($"  種別 0x147 = 0x{head[0x47]:X2} / ROM 0x148 = 0x{head[0x48]:X2} / RAM 0x149 = 0x{head[0x49]:X2}");
+            Console.WriteLine($"  ロゴ (0x104-0x10B): {Convert.ToHexString(head.AsSpan(0x04, 8))}  （正: CEED6666CC0D000B）");
+        }
+
+        return 0;
     }
 
     private static bool AllSame(byte[] data)
