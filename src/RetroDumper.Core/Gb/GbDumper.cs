@@ -46,7 +46,7 @@ public sealed class GbDumper : ICartridgeDumper
 
         string title = DecodeAscii(header.AsSpan(0x34, cgb ? 15 : 16));
         long romSize = options.RomSizeOverride ?? (32L * 1024 << romSizeCode);
-        long saveSize = options.IncludeSaveRam ? RamSizeFromCode(ramSizeCode) : 0;
+        long saveSize = options.IncludeSaveRam ? SaveSizeFor(cartType, ramSizeCode) : 0;
 
         var info = new CartridgeInfo
         {
@@ -60,7 +60,7 @@ public sealed class GbDumper : ICartridgeDumper
 
             // セーブだけを読み書きする画面のために、
             // 今回の吸い出しに含めるかとは別に、分かる値を持たせる。
-            SaveMemorySize = RamSizeFromCode(ramSizeCode),
+            SaveMemorySize = SaveSizeFor(cartType, ramSizeCode),
             GbCartridgeType = cartType,
         };
 
@@ -212,6 +212,18 @@ public sealed class GbDumper : ICartridgeDumper
         IProgress<DumpProgress>? progress,
         CancellationToken cancellationToken)
         => GbSave.Read(link, cartType, saveSize, progress, cancellationToken);
+
+    /// <summary>
+    /// セーブの容量。**MBC2 だけは別扱い。**
+    ///
+    /// MBC2 の RAM は 512×4bit で MBC2 チップに内蔵されており、
+    /// 外部 RAM ではない。そのためヘッダの RAM 容量欄 (0x149) は 0 になる。
+    /// そこを素直に読むと「セーブが無い」と判断してしまい、
+    /// MBC2 のカセットからセーブを吸い出せなくなる。
+    /// 参照実装も同じ場所で 512 を決め打ちしている。
+    /// </summary>
+    private static long SaveSizeFor(byte cartType, byte ramSizeCode)
+        => GbSave.IsMbc2(cartType) ? 512 : RamSizeFromCode(ramSizeCode);
 
     private static long RamSizeFromCode(byte code) => code switch
     {

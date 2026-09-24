@@ -172,6 +172,23 @@ public sealed class GbSaveTests
         Assert.All(cart.Snapshot(), b => Assert.Equal(0xF0, b & 0xF0));
     }
 
+    /// <summary>
+    /// **MBC2 のセーブ容量はヘッダから読めない。**
+    ///
+    /// MBC2 の RAM は 512×4bit で MBC2 チップに内蔵されており、外部 RAM ではない。
+    /// そのためヘッダの RAM 容量欄 (0x149) は 0 になる。素直に読むと
+    /// 「セーブが無い」と判断して吸い出せなくなる。
+    /// 参照実装も同じ場所で 512 を決め打ちしている。
+    /// </summary>
+    [Theory]
+    [InlineData((byte)0x05)]   // MBC2
+    [InlineData((byte)0x06)]   // MBC2 + バッテリー
+    public void MBC2の容量は512バイトと決め打つ(byte cartType)
+    {
+        Assert.Equal(512, GbSave.MaxSize(cartType));
+        Assert.True(GbSave.IsMbc2(cartType));
+    }
+
     [Fact]
     public void 許可していなければ書き込めない()
     {
