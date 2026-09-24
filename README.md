@@ -466,12 +466,28 @@ GB を吸い出せませんでした。現在は範囲を明示して分離し�
 吸い出した ROM を No-Intro の正規ダンプと CRC32 / MD5 / SHA-1 で照合します。
 一致すれば、容量も含めて正規ダンプとバイト単位で同一だと言い切れます。
 
-**DAT は exe に埋め込んであります**（gzip、計 939KB）。何も用意せずに使えます。
+**DAT は exe に埋め込んであります**（gzip、計 2.1MB）。何も用意せずに使えます。
+アダプタが扱える機種はすべて収録しています。
 
-| 機種 | 版 | 件数 |
+| 機種 | 出典 | 件数 |
 |---|---|---|
-| Game Boy Advance | 20260919-175115 | 3,533 |
-| Nintendo Entertainment System (**Headerless**) | 20260923-001145 | 4,554 |
+| Game Boy Advance | No-Intro 20260919-175115 | 3,533 |
+| Nintendo Entertainment System (**Headerless**) | No-Intro 20260923-001145 | 4,554 |
+| Super Nintendo Entertainment System | libretro-database 2026.08.01 | 4,268 |
+| Game Boy | libretro-database 2026.08.01 | 2,254 |
+| Game Boy Color | libretro-database 2026.08.01 | 2,566 |
+| Mega Drive / Genesis | libretro-database 2026.08.01 | 3,365 |
+| Master System / Mark III | libretro-database 2026.08.01 | 1,163 |
+| Game Gear | libretro-database 2026.08.01 | 915 |
+| PC Engine / TurboGrafx-16 | libretro-database 2026.08.01 | 495 |
+| PC Engine SuperGrafx | libretro-database 2026.08.01 | 5 |
+| サファミターボ | libretro-database 2026.08.01 | 13 |
+
+合計 23,131 件。
+
+DAT の形式は 2 種類あり、どちらも読めます。No-Intro の配布は XML、
+libretro-database の配布は clrmamepro 形式（括弧の入れ子になった素のテキスト）です。
+どちらも crc / md5 / sha1 を持つので、照合の確かさは変わりません。
 
 更新版や他機種の DAT を使う場合は、exe と同じ場所の `DataBase` フォルダに
 `*.dat` を置いてください。埋め込みと同じ名前ならフォルダ側が優先されます。

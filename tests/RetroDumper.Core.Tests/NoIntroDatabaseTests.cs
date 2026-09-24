@@ -57,6 +57,72 @@ public sealed class NoIntroDatabaseTests : IDisposable
     }
 
     /// <summary>
+    /// clrmamepro 形式の DAT も読めること。
+    ///
+    /// No-Intro の配布は XML だが、libretro-database が配っているものは
+    /// 括弧の入れ子になった素のテキスト。どちらも crc / md5 / sha1 を持つので、
+    /// 照合には同じように使える。入手先で形式が違うだけなので読む側で吸収する。
+    /// </summary>
+    [Fact]
+    public void clrmamepro形式のDATも読める()
+    {
+        var rom = SampleRom();
+
+        string crc = Checksums.Crc32(rom).ToString("X8");
+        string md5 = Convert.ToHexString(MD5.HashData(rom));
+        string sha1 = Convert.ToHexString(SHA1.HashData(rom));
+
+        File.WriteAllText(Path.Combine(_dir, "libretro.dat"),
+            $"""
+             clrmamepro (
+                 name "Super Nintendo"
+             )
+             game (
+                 name "Super Mario World (Japan)"
+                 region "Japan"
+                 rom ( name "Super Mario World (Japan).sfc" size {rom.Length} crc {crc} md5 {md5} sha1 {sha1} )
+             )
+             """);
+
+        var db = NoIntroDatabase.Load(_dir, null, includeEmbedded: false);
+
+        Assert.Equal(1, db.EntryCount);
+
+        var hit = db.Match(rom, rom.Length);
+
+        Assert.NotNull(hit);
+        Assert.Equal("Super Mario World (Japan)", hit!.GameName);
+        Assert.Equal(rom.Length, hit.Size);
+    }
+
+    /// <summary>1 つの game に rom が複数並ぶことがある。すべて拾うこと。</summary>
+    [Fact]
+    public void clrmamepro形式で1つのgameに複数のromがあっても拾う()
+    {
+        var first = SampleRom();
+        var second = new byte[2048];
+
+        for (int i = 0; i < second.Length; i++) second[i] = (byte)(i * 13 + 5);
+
+        string Rom(byte[] rom, string name) =>
+            $"""rom ( name "{name}" size {rom.Length} crc {Checksums.Crc32(rom):X8} md5 {Convert.ToHexString(MD5.HashData(rom))} sha1 {Convert.ToHexString(SHA1.HashData(rom))} )""";
+
+        File.WriteAllText(Path.Combine(_dir, "multi.dat"),
+            $"""
+             game (
+                 name "Two Discs (Japan)"
+                 {Rom(first, "a.sfc")}
+                 {Rom(second, "b.sfc")}
+             )
+             """);
+
+        var db = NoIntroDatabase.Load(_dir, null, includeEmbedded: false);
+
+        Assert.Equal(2, db.EntryCount);
+        Assert.Equal("Two Discs (Japan)", db.Match(second, second.Length)?.GameName);
+    }
+
+    /// <summary>
     /// 容量ごとの収録件数を引けること。
     ///
     /// 照合が外れたとき、原因が「DAT に未収録」なのか

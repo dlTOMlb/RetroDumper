@@ -997,8 +997,7 @@ public partial class MainWindow : Window
 
         // ROM を読んだのだから、ついでに名前も引いておく。
         // セーブの保存名に使う。読み直す必要はない。
-        if (_identifiedName is null)
-            _identifiedName = ReportNoIntroMatch(_lastGbaRom, Checksums.Crc32(_lastGbaRom))?.GameName;
+        _identifiedName ??= ReportNoIntroMatch(_lastGbaRom, Checksums.Crc32(_lastGbaRom))?.GameName;
 
         var detected = GbaSave.Detect(_lastGbaRom);
 
@@ -1064,6 +1063,8 @@ public partial class MainWindow : Window
 
             case CartridgeKind.SuperFamicom:
             {
+                await EnsureIdentifiedNameAsync();
+
                 if (_info.SnesMapping is null)
                 {
                     Log("SFC のマッパーが分かりません。セーブを読み書きできません。");
@@ -1083,6 +1084,8 @@ public partial class MainWindow : Window
 
             case CartridgeKind.GameBoy:
             {
+                await EnsureIdentifiedNameAsync();
+
                 if (_info.GbCartridgeType is null)
                 {
                     Log("GB のカートリッジ種別が分かりません。セーブを読み書きできません。");
@@ -1143,6 +1146,52 @@ public partial class MainWindow : Window
 
             default:
                 throw new RfcaException("この機種のセーブ書き込みには対応していません。");
+        }
+    }
+
+    /// <summary>
+    /// セーブの保存名に使う名前を、まだ持っていなければ ROM を読んで引く。
+    ///
+    /// GBA はセーブ装置の判定で ROM を読むので、そのついでに照合できる。
+    /// SFC と GB は読む理由が無いため、名前のためだけに読むことになる。
+    /// それでもヘッダの短いタイトルより、No-Intro の名前で残したほうが
+    /// あとから何のセーブか分かる。
+    ///
+    /// 引けなくても止めない。ヘッダのタイトルで保存すればよい。
+    /// </summary>
+    private async Task EnsureIdentifiedNameAsync()
+    {
+        if (_identifiedName is not null) return;
+        if (_link is null || _info is null || _activeDumper is null) return;
+
+        var link = _link;
+        var info = _info;
+        var dumper = _activeDumper;
+        var options = BuildOptions() ?? new DumpOptions();
+        var token = _cts?.Token ?? CancellationToken.None;
+
+        Log("セーブの名前を決めるため、ROM を読んで No-Intro と照合します。");
+
+        var romProgress = new Progress<DumpProgress>(p =>
+        {
+            DumpProgressBar.Value = p.Ratio;
+            ProgressText.Text = $"{p.Stage}  {p.Ratio:P1}";
+        });
+
+        try
+        {
+            var result = await Task.Run(() => dumper.Dump(link, info, options, romProgress, token));
+
+            _identifiedName = ReportNoIntroMatch(result.Rom, result.Crc32)?.GameName;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // 名前が付かないだけ。セーブの読み書きは続けられる。
+            Log($"ROM の照合に失敗しました（ヘッダのタイトルで保存します）: {ex.Message}");
         }
     }
 

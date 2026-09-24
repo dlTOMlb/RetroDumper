@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace RetroDumper.Core.Database;
@@ -149,7 +150,110 @@ public sealed class NoIntroDatabase
         return LoadStream(stream);
     }
 
+    /// <summary>
+    /// DAT を読む。形式は中身から判断する。
+    ///
+    /// No-Intro の配布は XML だが、libretro-database が配っているものは
+    /// clrmamepro 形式で、括弧の入れ子になった素のテキスト。
+    /// どちらも crc / md5 / sha1 / size を持つので、照合には同じように使える。
+    /// 入手先によって形式が違うだけなので、読む側で吸収する。
+    /// </summary>
     private int LoadStream(Stream stream)
+    {
+        // 先頭を覗いて形式を見る。読んだぶんは巻き戻す。
+        var buffered = new MemoryStream();
+        stream.CopyTo(buffered);
+
+        foreach (byte b in buffered.ToArray())
+        {
+            if (b is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n' or 0xEF or 0xBB or 0xBF)
+                continue;
+
+            buffered.Position = 0;
+            return b == (byte)'<' ? LoadXml(buffered) : LoadClrMamePro(buffered);
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// clrmamepro 形式を読む。
+    ///
+    ///   game (
+    ///       name "Super Mario World (Japan)"
+    ///       rom ( name "....sfc" size 524288 crc 8C0FD9 md5 ... sha1 ... )
+    ///   )
+    ///
+    /// 1 つの game に rom が複数並ぶことがある。
+    /// </summary>
+    private int LoadClrMamePro(Stream stream)
+    {
+        using var reader = new StreamReader(stream);
+
+        int added = 0;
+        bool inGame = false;
+        string gameName = "";
+
+        while (reader.ReadLine() is { } line)
+        {
+            string text = line.Trim();
+
+            if (text.StartsWith("game (", StringComparison.Ordinal))
+            {
+                inGame = true;
+                gameName = "";
+                continue;
+            }
+
+            if (text == ")")
+            {
+                inGame = false;
+                continue;
+            }
+
+            if (!inGame) continue;
+
+            if (text.StartsWith("rom (", StringComparison.Ordinal))
+            {
+                if (Field(text, "crc") is not { Length: > 0 } crc) continue;
+
+                long.TryParse(Field(text, "size"), out long size);
+
+                var entry = new NoIntroEntry(
+                    gameName,
+                    Quoted(text, "name") ?? gameName,
+                    size,
+                    crc.ToUpperInvariant(),
+                    Field(text, "md5")?.ToUpperInvariant(),
+                    Field(text, "sha1")?.ToUpperInvariant());
+
+                Add(entry);
+                added++;
+                continue;
+            }
+
+            if (gameName.Length == 0 && text.StartsWith("name ", StringComparison.Ordinal))
+                gameName = Quoted(text, "name") ?? "";
+        }
+
+        return added;
+    }
+
+    /// <summary>括弧なしの値（size 131072、crc 9A024415 など）を取り出す。</summary>
+    private static string? Field(string text, string key)
+    {
+        var match = Regex.Match(text, $@"\b{key}\s+([0-9A-Za-z]+)");
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    /// <summary>引用符付きの値を取り出す。</summary>
+    private static string? Quoted(string text, string key)
+    {
+        var match = Regex.Match(text, $@"\b{key}\s+""([^""]*)""");
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    private int LoadXml(Stream stream)
     {
         var doc = XDocument.Load(stream);
         int added = 0;
@@ -174,20 +278,26 @@ public sealed class NoIntroDatabase
                     ((string?)rom.Attribute("md5"))?.Trim().ToUpperInvariant(),
                     ((string?)rom.Attribute("sha1"))?.Trim().ToUpperInvariant());
 
-                if (!_byCrc.TryGetValue(entry.Crc32, out var list))
-                    _byCrc[entry.Crc32] = list = [];
-
-                list.Add(entry);
-
-                if (entry.Size > 0)
-                    _bySize[entry.Size] = _bySize.GetValueOrDefault(entry.Size) + 1;
-
+                Add(entry);
                 added++;
-                EntryCount++;
             }
         }
 
         return added;
+    }
+
+    /// <summary>索引に加える。形式によらず、ここを通す。</summary>
+    private void Add(NoIntroEntry entry)
+    {
+        if (!_byCrc.TryGetValue(entry.Crc32, out var list))
+            _byCrc[entry.Crc32] = list = [];
+
+        list.Add(entry);
+
+        if (entry.Size > 0)
+            _bySize[entry.Size] = _bySize.GetValueOrDefault(entry.Size) + 1;
+
+        EntryCount++;
     }
 
     /// <summary>

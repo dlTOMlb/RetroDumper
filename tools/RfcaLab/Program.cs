@@ -40,6 +40,7 @@ internal static class Program
                 "savetype" => SaveType(port),
                 "savetest" => SaveTest(port, args),
                 "flashid" => FlashId(port),
+                "dbinfo" => DatabaseInfo(),
                 "wflash" => WriteFlash(port, args),
                 _ => Usage(),
             };
@@ -557,6 +558,16 @@ internal static class Program
         GbaSave.Write(link, type, data, progress);
 
         Console.WriteLine("書き込みと照合が通りました。");
+        return 0;
+    }
+
+    /// <summary>埋め込んだ DAT の読み込み結果を見る。実機は要らない。</summary>
+    private static int DatabaseInfo()
+    {
+        var db = RetroDumper.Core.Database.NoIntroDatabase.Load(
+            log: line => Console.WriteLine($"  {line}"));
+
+        Console.WriteLine($"合計 {db.EntryCount} 件");
         return 0;
     }
 
