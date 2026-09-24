@@ -251,28 +251,25 @@ public sealed class GbaSaveWriteTests
     }
 
     /// <summary>
-    /// **フラッシュへの書き込みは行わない。**
+    /// フラッシュも分割して書けること。
     ///
-    /// 2026-09-24、ポケモン エメラルド（Sanyo 0x1362、128KB）で試したところ、
-    /// 4096 バイトの書き込みでポートがタイムアウトし、再試行すると
-    /// アダプタが USB から消えた。抜き差ししないと復帰しない。
-    /// 何が過負荷なのかを掴めていないので塞いでいる。吸い出しは行える。
-    ///
-    /// 直したと思ったら、このテストを消す前に実機で確かめること。
+    /// 詰まっていた原因は、書き込みの直前にフラッシュ ID を読んでいたこと。
+    /// ID の読み出しは石を ID モードに入れるため、そのまま書くと
+    /// 本体を引き取ってもらえず、アダプタが USB から落ちる。
+    /// ID を確認したあとスロットを選び直すことで両立できる。
+    /// ポケモン エメラルド（Sanyo 0x1362、128KB）で照合まで通ることを確認済み。
     /// </summary>
     [Theory]
     [InlineData(GbaSaveType.Flash512k, 65536)]
     [InlineData(GbaSaveType.Flash1M, 131072)]
-    public void フラッシュには書き込まない(GbaSaveType type, int size)
+    public void フラッシュは分割して書いても内容が変わらない(GbaSaveType type, int size)
     {
         var cart = new FakeGbaSaveCartridge(size) { AllowSaveWrites = true };
-        var before = cart.Snapshot();
+        var data = Pattern(size);
 
-        var error = Assert.Throws<RfcaException>(
-            () => GbaSave.Write(cart, type, Pattern(size)));
+        GbaSave.Write(cart, type, data);
 
-        Assert.Contains("フラッシュへの書き込みは行いません", error.Message);
-        Assert.Equal(before, cart.Snapshot());
+        Assert.Equal(data, cart.Snapshot());
     }
 
     /// <summary>塞いでいるのは書き込みだけ。吸い出しは行えること。</summary>

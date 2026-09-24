@@ -191,6 +191,18 @@ public sealed class GbDumper : ICartridgeDumper
         }
     }
 
+    /// <summary>バンクごとの進捗を、全体の進捗に読み替える。</summary>
+    private sealed class BankProgress(IProgress<DumpProgress>? inner, long baseOffset, long total)
+        : IProgress<DumpProgress>
+    {
+        public void Report(DumpProgress value)
+            => inner?.Report(new DumpProgress(value.Stage, baseOffset + value.BytesDone, total));
+    }
+
+    /// <summary>
+    /// セーブ RAM を読む。手順は MBC ごとに違うので <see cref="GbSave"/> に任せる。
+    /// 値も段取りも RetroFreakDumper の各コントローラに合わせてある。
+    /// </summary>
     private static byte[] DumpSaveRam(
         IRfcaLink link,
         uint read,
@@ -199,53 +211,7 @@ public sealed class GbDumper : ICartridgeDumper
         DumpOptions options,
         IProgress<DumpProgress>? progress,
         CancellationToken cancellationToken)
-    {
-        uint write = RfcaOpcode.GameBoyWrite;
-
-        // 外部 RAM を有効化する。
-        link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x0000, 0x0A);
-
-        try
-        {
-            int bankCount = (int)Math.Max(1, (saveSize + SaveBankSize - 1) / SaveBankSize);
-            var save = new byte[saveSize];
-            long done = 0;
-
-            for (int bank = 0; bank < bankCount; bank++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x4000, (byte)bank);
-
-                int length = (int)Math.Min(SaveBankSize, saveSize - done);
-                long captured = done;
-
-                byte[] part = BulkReader.Read(
-                    link, read, length,
-                    offsetInBank => (uint)(SaveBase + offsetInBank),
-                    options, $"セーブ読み出し (バンク {bank})",
-                    new BankProgress(progress, captured, saveSize),
-                    cancellationToken);
-
-                part.CopyTo(save, done);
-                done += length;
-            }
-
-            return save;
-        }
-        finally
-        {
-            // 外部 RAM を無効化して戻す。書き込み事故を避ける。
-            link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x0000, 0x00);
-        }
-    }
-
-    private sealed class BankProgress(IProgress<DumpProgress>? inner, long baseOffset, long total)
-        : IProgress<DumpProgress>
-    {
-        public void Report(DumpProgress value)
-            => inner?.Report(new DumpProgress(value.Stage, baseOffset + value.BytesDone, total));
-    }
+        => GbSave.Read(link, cartType, saveSize, progress, cancellationToken);
 
     private static long RamSizeFromCode(byte code) => code switch
     {

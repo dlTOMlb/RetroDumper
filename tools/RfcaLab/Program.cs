@@ -40,6 +40,7 @@ internal static class Program
                 "savetype" => SaveType(port),
                 "savetest" => SaveTest(port, args),
                 "flashid" => FlashId(port),
+                "wflash" => WriteFlash(port, args),
                 _ => Usage(),
             };
         }
@@ -516,6 +517,42 @@ internal static class Program
         Console.WriteLine("  128KB: 0x09C2 (Macronix) / 0x1362 (Sanyo)");
         Console.WriteLine("   64KB: 0x1B32 (Panasonic) / 0x3D1F (Atmel) / 0xD4BF (SST)");
 
+        return 0;
+    }
+
+    /// <summary>
+    /// フラッシュを指定の分割幅で書き戻し、どこで詰まるかを見る。
+    /// 参照実装は 4096 バイトずつ。実機で詰まるので幅を変えて試す。
+    /// </summary>
+    private static int WriteFlash(string port, string[] args)
+    {
+        string path = args.Length > 2 ? args[2] : "";
+        byte[] data = File.ReadAllBytes(path);
+
+        using var link = Open(port);
+        Console.WriteLine($"ポート設定: {link.PortSettings}");
+
+        link.AllowSaveWrites = true;
+
+        if (args.Length > 4 && int.TryParse(args[4], out int timeout))
+        {
+            link.PayloadWriteTimeout = timeout;
+            Console.WriteLine($"本体送信の待ち時間を {timeout}ms にします。");
+        }
+
+        var type = data.Length == 65536 ? GbaSaveType.Flash512k : GbaSaveType.Flash1M;
+
+        Console.WriteLine($"{GbaSave.DisplayName(type)} を書き戻します。");
+
+        var progress = new Progress<RetroDumper.Core.Dumping.DumpProgress>(p =>
+        {
+            if (p.BytesDone % (16 * 1024) == 0)
+                Console.WriteLine($"  {p.Stage} {p.BytesDone} / {p.BytesTotal}");
+        });
+
+        GbaSave.Write(link, type, data, progress);
+
+        Console.WriteLine("書き込みと照合が通りました。");
         return 0;
     }
 

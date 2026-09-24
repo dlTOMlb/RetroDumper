@@ -85,10 +85,19 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     public RfcaLink(string portName)
     {
         PortName = portName;
+        // 設定は RetroFreakDumper (MainForm) に合わせる。
+        //
+        // **バッファの大きさが効く。**既定の送信バッファは 2048 バイトしかなく、
+        // フラッシュの 4096 バイト書き込みが収まらない。ドライバが吐き出すまで
+        // Write がブロックし、1 秒のタイムアウトに掛かって失敗していた。
+        // 失敗したまま再試行したところ、アダプタが USB から落ちた（2026-09-24 実機）。
+        // 受信バッファも既定 4096 バイトで、大きな読み出しで取りこぼす余地があった。
         _port = new SerialPort(portName, BaudRate, Parity.None, 8, StopBits.One)
         {
-            ReadTimeout = 250,
-            WriteTimeout = 1000,
+            ReadBufferSize = BufferSize,
+            WriteBufferSize = BufferSize,
+            ReadTimeout = PortReadTimeout,
+            WriteTimeout = PortWriteTimeout,
             Handshake = Handshake.None,
             DtrEnable = true,
             RtsEnable = true,
@@ -802,6 +811,20 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// EEPROM の読み書きが安定しない件で見つかった差分。
     /// 同じカセットを 2 回読んで 2 バイト違う、という現象が出ている。
     /// </summary>
+    /// <summary>
+    /// 本体送信の待ち時間。フラッシュで詰まる原因を切り分けるため変えられる。
+    /// </summary>
+    public int PayloadWriteTimeout
+    {
+        get => _port.WriteTimeout;
+        set => _port.WriteTimeout = value;
+    }
+
+    /// <summary>実際に効いているポートの設定。切り分け用。</summary>
+    public string PortSettings =>
+        $"送信バッファ {_port.WriteBufferSize} / 受信バッファ {_port.ReadBufferSize} / " +
+        $"読み {_port.ReadTimeout}ms / 書き {_port.WriteTimeout}ms";
+
     public void ReinitializeSlot()
     {
         lock (_gate)
@@ -857,6 +880,15 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
             Trace?.Invoke($"WARN: ポートの開き直しに失敗しました ({ex.GetType().Name})");
         }
     }
+
+    /// <summary>送受信バッファ。参照実装と同じ 1MB。</summary>
+    private const int BufferSize = 1024 * 1024;
+
+    /// <summary>ポートの読み出しタイムアウト。参照実装と同じ。</summary>
+    private const int PortReadTimeout = 3000;
+
+    /// <summary>ポートの書き込みタイムアウト。参照実装と同じ。</summary>
+    private const int PortWriteTimeout = 5000;
 
     /// <summary>ポートを閉じてから開くまでの間隔。</summary>
     private const int ReopenGapMilliseconds = 120;
@@ -946,36 +978,23 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
 
             // ライト要求 ACK。実機は 8 バイトのゼロを返すが、
             // 異なる応答でも処理を続行する（dumpfreak と同じ挙動）。
+            // 待ち時間は参照実装の ReadTimeout に合わせる。
             Span<byte> ack = stackalloc byte[8];
-            int got = TryReadExact(ack, TimeSpan.FromMilliseconds(600));
+            int got = TryReadExact(ack, AckWait);
             if (got == 0)
                 throw new RfcaTimeoutException(
                     $"opcode 0x{opcode:X2} のライト要求に応答がありません");
             if (got == 8 && !IsAllZero(ack))
                 Trace?.Invoke($"WARN: ライト要求 ACK が非ゼロ {Convert.ToHexString(ack)}");
 
-            // データ本体送信。
-            //
-            // **書き込みは読み出しより待たされる。**
-            // フラッシュは 1 区画ごとに消去と書き込みを行うため、
-            // アダプタが受け取りを絞る。既定の 1 秒では
-            // 4KB を送り切る前にポートがタイムアウトする（実機で発生）。
-            // 送る量に見合った待ち時間にして、終わったら戻す。
-            int previousWriteTimeout = _port.WriteTimeout;
+            // データ本体送信。送り終えてから、送信バッファが空になるのを待つ。
+            // 参照実装も Write の直後に必ず WaitWriteBytesZero を呼んでいる。
+            _port.Write(data.ToArray(), 0, data.Length);
+            WaitWriteDrained();
 
-            try
-            {
-                _port.WriteTimeout = (int)WriteTimeoutFor(data.Length).TotalMilliseconds;
-                _port.Write(data.ToArray(), 0, data.Length);
-            }
-            finally
-            {
-                _port.WriteTimeout = previousWriteTimeout;
-            }
-
-            // 書き込みの完了応答も同じ理由で待つ。
+            // 書き込みの完了応答。フラッシュは消去と書き込みを伴うぶん待たされる。
             Span<byte> ack2 = stackalloc byte[8];
-            int got2 = TryReadExact(ack2, WriteTimeoutFor(data.Length));
+            int got2 = TryReadExact(ack2, WriteAckWait);
             if (got2 == 0)
                 throw new RfcaTimeoutException(
                     $"addr 0x{address:X6} へのデータ書き込みに応答がありません");
@@ -1041,14 +1060,35 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
         Trace?.Invoke($"TX op=0x{opcode:X2} addr=0x{address:X6} size={size}");
     }
 
+    /// <summary>応答を待つ時間。参照実装の ReadTimeout と同じ。</summary>
+    private static readonly TimeSpan AckWait = TimeSpan.FromMilliseconds(PortReadTimeout);
+
     /// <summary>
-    /// 書き込みに見合った待ち時間。
-    ///
-    /// フラッシュの消去と書き込みは 1 区画あたり数十〜数百ミリ秒かかる。
-    /// 転送そのものの時間に、その分の余裕を足しておく。
+    /// 書き込みの完了応答を待つ時間。
+    /// フラッシュの消去と書き込みは区画ごとに時間がかかるので長めに取る。
     /// </summary>
-    private static TimeSpan WriteTimeoutFor(int bytes)
-        => TimeSpan.FromMilliseconds(10_000 + bytes * 1000.0 / 11000.0);
+    private static readonly TimeSpan WriteAckWait = TimeSpan.FromMilliseconds(PortWriteTimeout);
+
+    /// <summary>
+    /// 送信バッファが空になるのを待つ。
+    ///
+    /// 参照実装は書き込みのたびにこれを行っている（WaitWriteBytesZero）。
+    /// バッファに積んだだけで次へ進むと、アダプタがまだ受け取り切っていない
+    /// うちに次のコマンドを送ることになる。
+    /// </summary>
+    private void WaitWriteDrained()
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(PortWriteTimeout);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            if (_port.BytesToWrite == 0) return;
+
+            Thread.Sleep(0);
+        }
+
+        Trace?.Invoke("WARN: 送信バッファが空になりませんでした");
+    }
 
     /// <summary>転送サイズに見合ったタイムアウト。115200bps ≒ 11.5KB/s。</summary>
     private static TimeSpan EstimateTransferTimeout(int bytes)

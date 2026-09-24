@@ -51,7 +51,8 @@ public sealed class FakeGbaSaveCartridge(int saveSize) : IRfcaLink
     public byte[] SendControl(uint opcode, uint address = 0, uint size = 0,
                               uint parameter = 0, uint headerField = 0x08) => new byte[8];
 
-    public int ReadGbaFlashId() => 0x1B32;      // 対応表にある 512K の石
+    /// <summary>容量に見合った、対応表にある石の ID を返す。</summary>
+    public int ReadGbaFlashId() => saveSize >= 131072 ? 0x1362 : 0x1B32;
 
     public void WriteSaveMemory(CartridgeKind kind, uint opcode, uint address, ReadOnlySpan<byte> data)
     {

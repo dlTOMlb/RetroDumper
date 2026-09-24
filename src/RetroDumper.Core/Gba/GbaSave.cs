@@ -273,7 +273,7 @@ public static class GbaSave
         // 読み出しが揺れていると照合そのものが成立せず、
         // 「書けたのか壊したのか」を判断できないまま書くことになる。
         // それは利用者のセーブを賭けるに値しない。安定してから書く。
-        if (IsEeprom(type))
+        // 装置を問わず、書く前に読み出しが安定しているかを確かめる。
         {
             var (stable, differences) = CheckReadStability(link, type, cancellationToken);
 
@@ -291,29 +291,17 @@ public static class GbaSave
 
         if (type is GbaSaveType.Flash512k or GbaSaveType.Flash1M)
         {
-            // **フラッシュへの書き込みは行わない。**
-            //
-            // 2026-09-24、ポケモン エメラルド（Sanyo 0x1362、128KB）で試したところ、
-            // 4096 バイトの書き込みでポートがタイムアウトし、
-            // 再試行するとアダプタが USB から消えた（COM ポートが無くなる）。
-            // 抜き差ししないと復帰しない。
-            //
-            // 幸いセーブは無傷だった（書き込みの前後で控えが完全に一致）。
-            // 届く前に止まっていたためで、たまたま助かったにすぎない。
-            //
-            // フラッシュは消去と書き込みを伴うぶん、他の装置より重い。
-            // 何が過負荷なのかを掴めていない状態で利用者のセーブを賭けられない。
-            // 吸い出しは問題なく行える。
-            throw new RfcaException(
-                "フラッシュへの書き込みは行いません。" + Environment.NewLine +
-                "2026-09-24 の実機確認で、書き込み中にアダプタが USB から" +
-                "切り離される現象が起きました。原因が分かるまで塞いでいます。" +
-                Environment.NewLine +
-                "セーブの吸い出しは行えます。");
-
-#pragma warning disable CS0162 // 到達不能。封鎖を解いたときに使う。
             EnsureKnownFlash(link, type);
-#pragma warning restore CS0162
+
+            // **ID を読んだらスロットを選び直す。**
+            //
+            // ID の読み出しは石を ID モードに入れる。そのまま書き込むと、
+            // 要求には受理応答が返るのに本体を引き取ってもらえず、
+            // 送信が詰まったままアダプタが USB から落ちる（2026-09-24 実機）。
+            // ID を読まずに書けば通ることで、原因がここだと確かめた。
+            // 選び直し (0x04 → 0x05 → 200ms) を挟めば、ID を確認したうえで書ける。
+            // ポケモン エメラルド（Sanyo 0x1362、128KB）で照合まで通ることを確認済み。
+            link.ReinitializeSlot();
         }
 
         if (type == GbaSaveType.Eeprom4k)
@@ -548,6 +536,12 @@ public static class GbaSave
     {
         GbaSaveType.Eeprom4k or GbaSaveType.Eeprom64k => 512,
         GbaSaveType.Flash512k or GbaSaveType.Flash1M => 4096,
-        _ => SizeOf(type),
+
+        // SRAM / FRAM は一括ではなく 8192 バイトずつ。
+        // 参照実装の Command.Write が、どの装置でも本体を 8192 で区切っている。
+        _ => Math.Min(SizeOf(type), MaxPayload),
     };
+
+    /// <summary>1 コマンドで送る本体の上限。参照実装の Command.Write に合わせた。</summary>
+    private const int MaxPayload = 8192;
 }
