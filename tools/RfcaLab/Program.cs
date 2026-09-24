@@ -43,6 +43,7 @@ internal static class Program
                 "flashid" => FlashId(port),
                 "dbinfo" => DatabaseInfo(),
                 "gbhead" => GbHeader(port),
+                "survey" => Survey(port),
                 "wflash" => WriteFlash(port, args),
                 _ => Usage(),
             };
@@ -60,6 +61,7 @@ internal static class Program
         Console.WriteLine("""
             使い方: rfcalab <コマンド> [ポート] [引数]
 
+              survey [COM3]                 挿さっているカセットの素性を手早く調べる（読むだけ）
               savetype [COM3]               ROM を読んでセーブ装置の種類を調べる（読むだけ）
               savetest [COM3] [控えの保存先]  吸い出し→同じ内容を書き戻し→照合（**書き込む**）
               probe  [COM3]                 状態と EEPROM の読み出し安定性を見る（読むだけ）
@@ -727,6 +729,81 @@ internal static class Program
             Console.WriteLine($"  ロゴ (0x104-0x10B): {Convert.ToHexString(head.AsSpan(0x04, 8))}  （正: CEED6666CC0D000B）");
         }
 
+        return 0;
+    }
+
+    /// <summary>
+    /// 挿さっているカセットの素性を手早く調べる。読むだけ。
+    ///
+    /// GB / GBC はヘッダ 1 バイトで MBC が決まるので一瞬で終わる。
+    /// GBA はセーブ装置の目印を ROM から探す必要があるが、
+    /// **見つかった時点で打ち切る**。多くのソフトは目印が前半にあるため、
+    /// 全部読むより早く終わる。棚から順に挿して調べるときのための入口。
+    /// </summary>
+    private static int Survey(string port)
+    {
+        using var link = Open(port, require: null);
+
+        var kind = link.GetStatus().Kind;
+
+        if (kind == CartridgeKind.GameBoy)
+        {
+            var gb = new RetroDumper.Core.Gb.GbDumper();
+            var info = gb.Identify(link, new RetroDumper.Core.Dumping.DumpOptions());
+
+            Console.WriteLine($"タイトル: {info.Title}");
+            Console.WriteLine($"MBC: {info.Mapper}（種別 0x{info.GbCartridgeType:X2}）");
+            Console.WriteLine($"ROM: {info.RomSize / 1024} KB");
+            Console.WriteLine($"セーブ: {info.SaveMemorySize} バイト");
+
+            return 0;
+        }
+
+        if (kind != CartridgeKind.GameBoyAdvance)
+        {
+            Console.WriteLine($"{kind.ToDisplayName()} は survey に未対応です。");
+            return 1;
+        }
+
+        var dumper = new RetroDumper.Core.Gba.GbaDumper();
+        var header = dumper.Identify(link, new RetroDumper.Core.Dumping.DumpOptions());
+
+        Console.WriteLine($"タイトル: {header.Title}");
+        Console.WriteLine($"ROM: {header.RomSize / 1024 / 1024} MB");
+        Console.Write("セーブ装置の目印を探しています");
+
+        // 目印が見つかるまで 256KB ずつ読む。見つかったら打ち切る。
+        const int block = 256 * 1024;
+        var found = GbaSaveType.None;
+
+        for (long at = 0; at < header.RomSize && found == GbaSaveType.None; at += block)
+        {
+            int length = (int)Math.Min(block, header.RomSize - at);
+
+            // 目印が境目をまたいでも拾えるよう、少し戻って読む。
+            long from = Math.Max(0, at - 32);
+            var part = link.Read(RfcaOpcode.GbaRomRead, (uint)from, (int)(at - from) + length);
+
+            found = GbaSave.Detect(part);
+            Console.Write(".");
+        }
+
+        Console.WriteLine();
+
+        if (found == GbaSaveType.None)
+        {
+            Console.WriteLine("セーブ装置: 目印が見つかりません（セーブしないソフトか独自方式）");
+            return 0;
+        }
+
+        if (GbaSave.AlternateEeprom(found) is not null)
+        {
+            var probe = GbaSave.ProbeEepromSize(link, found);
+            Console.WriteLine($"  EEPROM の容量判定: {probe.Reason}");
+            found = probe.Type;
+        }
+
+        Console.WriteLine($"セーブ装置: {GbaSave.DisplayName(found)} ({GbaSave.SizeOf(found)} バイト)");
         return 0;
     }
 
