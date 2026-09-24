@@ -353,6 +353,10 @@ public partial class MainWindow : Window
         DetectCartridge();
         if (DumperCombo.SelectedItem is ICartridgeDumper refreshed) dumper = refreshed;
 
+        // 別のカセットかもしれない。前のソフトの名前を持ち越さない。
+        _identifiedName = null;
+        _lastGbaRom = null;
+
         SetBusy(true);
 
         try
@@ -441,6 +445,9 @@ public partial class MainWindow : Window
 
             // 照合してからファイル名を決める。
             var identified = ReportNoIntroMatch(result.Rom, result.Crc32);
+
+            // セーブの保存名にも使う。
+            _identifiedName = identified?.GameName;
 
             // 照合できなかったときは、取りこぼさないよう控えを残す。
             // 吸い出しには時間がかかるうえ、原因を調べるには現物が要る。
@@ -899,6 +906,16 @@ public partial class MainWindow : Window
     private byte[]? _lastGbaRom;
 
     /// <summary>
+    /// No-Intro で特定したソフト名。セーブの保存名に使う。
+    ///
+    /// カートリッジのヘッダにある名前は短く詰められていて
+    /// （"POKEMON EMER"）、あとから見て分かりにくい。
+    /// ROM を読んだついでに照合できているなら、そちらの名前を使う。
+    /// カセットを入れ替えたら捨てる。別のソフトの名前で保存しては困る。
+    /// </summary>
+    private string? _identifiedName;
+
+    /// <summary>
     /// EEPROM の容量を根拠をもって決められたか。
     ///
     /// 中身が空のカセットでは読んでも分からない。その場合に限り、
@@ -977,6 +994,11 @@ public partial class MainWindow : Window
 
             _lastGbaRom = result.Rom;
         }
+
+        // ROM を読んだのだから、ついでに名前も引いておく。
+        // セーブの保存名に使う。読み直す必要はない。
+        if (_identifiedName is null)
+            _identifiedName = ReportNoIntroMatch(_lastGbaRom, Checksums.Crc32(_lastGbaRom))?.GameName;
 
         var detected = GbaSave.Detect(_lastGbaRom);
 
@@ -1151,10 +1173,15 @@ public partial class MainWindow : Window
 
             byte[] save = await Task.Run(() => ReadSaveCore(link, info, target, progress, token));
 
+            // ヘッダの名前ではなく、No-Intro で特定した名前を使う。
+            // "POKEMON EMER" より "Pocket Monsters - Emerald (Japan)" のほうが、
+            // あとからファイルを見たときに何のセーブか分かる。
+            string saveName = _identifiedName ?? _info?.Title;
+
             var dialog = new SaveFileDialog
             {
                 Title = "セーブデータの保存先",
-                FileName = FileNaming.MakeRomFileName(_info?.Title, ".sav"),
+                FileName = FileNaming.MakeRomFileName(saveName, ".sav"),
                 Filter = "セーブデータ (*.sav)|*.sav|すべてのファイル (*.*)|*.*",
                 AddExtension = true,
                 DefaultExt = "sav",

@@ -101,4 +101,18 @@ public sealed class NoIntroNamingTests
     [Fact]
     public void 特定できなければ既定の名前になる()
         => Assert.Equal("cartridge.nes", FileNaming.MakeRomFileName("", ".nes"));
+
+    /// <summary>
+    /// セーブデータも No-Intro の名前で保存する。
+    ///
+    /// カートリッジのヘッダにある名前は短く詰められていて
+    /// （"POKEMON EMER"、"CRASH"）、あとからファイルを見ても
+    /// 何のセーブか分かりにくい。ROM を読んだついでに照合できているなら
+    /// そちらの名前を使う。
+    /// </summary>
+    [Theory]
+    [InlineData("Pocket Monsters - Emerald (Japan)", "Pocket Monsters - Emerald (Japan).sav")]
+    [InlineData("Crash Bandicoot Advance (Japan)", "Crash Bandicoot Advance (Japan).sav")]
+    public void セーブもNo_Intro名で保存する(string game, string expected)
+        => Assert.Equal(expected, FileNaming.MakeRomFileName(game, ".sav"));
 }

@@ -357,6 +357,10 @@ internal static class Program
         var result = dumper.Dump(link, info, options, null, CancellationToken.None);
         var type = GbaSave.Detect(result.Rom);
 
+        var db = RetroDumper.Core.Database.NoIntroDatabase.Load(log: null);
+        var hit = db.Match(result.Rom, result.Rom.Length);
+
+        Console.WriteLine($"No-Intro の名前: {hit?.GameName ?? "（一致なし）"}");
         Console.WriteLine($"セーブ装置: {GbaSave.DisplayName(type)}");
 
         if (GbaSave.AlternateEeprom(type) is not null)
