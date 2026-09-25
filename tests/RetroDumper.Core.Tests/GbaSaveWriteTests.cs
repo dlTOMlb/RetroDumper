@@ -281,6 +281,52 @@ public sealed class GbaSaveWriteTests
 
         Assert.Equal(Pattern(65536), GbaSave.Read(cart, GbaSaveType.Flash512k));
     }
+
+    /// <summary>
+    /// **ID の取りこぼしで、対応している石を弾かないこと。**
+    ///
+    /// 実機では 2 バイト目が落ち、メーカー番号の繰り返しが返ることがある。
+    /// 黄金の太陽 失われし時代（SST 0xD4BF）は 5 回に 1 回しか正しく読めず、
+    /// 残りは 0xBFBF だった。読み直しの回数が足りないと、
+    /// 書けるはずのカートリッジに「対応していないフラッシュです」と
+    /// 言って断ることになる。
+    /// </summary>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(5)]
+    [InlineData(10)]
+    [InlineData(20)]
+    public void ID取りこぼしがあっても書ける(int goodEvery)
+    {
+        var cart = new FakeGbaSaveCartridge(65536)
+        {
+            AllowSaveWrites = true,
+            FlashIdGoodEvery = goodEvery,
+        };
+
+        var data = Pattern(65536);
+
+        GbaSave.Write(cart, GbaSaveType.Flash512k, data);
+
+        Assert.Equal(data, cart.Snapshot());
+    }
+
+    /// <summary>正しい値が一度も出ない石は、書かずに断ること。</summary>
+    [Fact]
+    public void 知らない石には書かない()
+    {
+        var cart = new FakeGbaSaveCartridge(65536)
+        {
+            AllowSaveWrites = true,
+            FlashIdGoodEvery = int.MaxValue,   // 常に取りこぼす
+        };
+
+        var error = Assert.Throws<RfcaException>(
+            () => GbaSave.Write(cart, GbaSaveType.Flash512k, Pattern(65536)));
+
+        Assert.Contains("対応していないフラッシュ", error.Message);
+    }
+
 }
 
 /// <summary>

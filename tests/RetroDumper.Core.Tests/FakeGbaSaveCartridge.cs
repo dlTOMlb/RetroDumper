@@ -52,7 +52,28 @@ public sealed class FakeGbaSaveCartridge(int saveSize) : IRfcaLink
                               uint parameter = 0, uint headerField = 0x08) => new byte[8];
 
     /// <summary>容量に見合った、対応表にある石の ID を返す。</summary>
-    public int ReadGbaFlashId() => saveSize >= 131072 ? 0x1362 : 0x1B32;
+    /// <summary>
+    /// ID の読み出しを何回に 1 回だけ成功させるか。
+    /// 実機では 2 バイト目が落ち、メーカー番号の繰り返しが返ることがある。
+    /// </summary>
+    public int FlashIdGoodEvery { get; set; } = 1;
+
+    /// <summary>検証用: ID を何回読まれたか。</summary>
+    public int FlashIdReads { get; private set; }
+
+    public int ReadGbaFlashId()
+    {
+        FlashIdReads++;
+
+        int good = saveSize >= 131072 ? 0x1362 : 0xD4BF;
+
+        if (FlashIdGoodEvery <= 1 || FlashIdReads % FlashIdGoodEvery == 0) return good;
+
+        // 取りこぼし。2 バイト目が 1 バイト目（メーカー番号）の繰り返しになる。
+        int maker = good & 0xFF;
+
+        return (maker << 8) | maker;
+    }
 
     public void WriteSaveMemory(CartridgeKind kind, uint opcode, uint address, ReadOnlySpan<byte> data)
     {

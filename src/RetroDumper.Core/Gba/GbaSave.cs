@@ -408,6 +408,13 @@ public static class GbaSave
         // 1 バイト目（メーカー番号 0x62）の繰り返しになったもので、
         // 石が変わったのではなく読み取りの取りこぼし。
         // 1 回で決めると、対応している石を弾いてしまう。
+        //
+        // **取りこぼす比率は石によってまるで違う。**
+        // 黄金の太陽 失われし時代（SST 0xD4BF）は 5 回中 1 回しか
+        // 正しい値が出ず、残りは 0xBFBF だった（2026-09-26 実機）。
+        // 5 回で打ち切ると 0.8^5 ≒ 33% の確率で、対応している石を
+        // 「対応していない」と言って書き込みを断ることになる。
+        // 読み直しは速いので、回数で潰す。
         var seen = new List<int>();
 
         for (int attempt = 0; attempt < FlashIdAttempts; attempt++)
@@ -423,8 +430,13 @@ public static class GbaSave
             "書き込むと壊すおそれがあるため中止しました。吸い出しは行えます。");
     }
 
-    /// <summary>ID の読み直し回数。取りこぼしても既知の値が出れば認める。</summary>
-    private const int FlashIdAttempts = 5;
+    /// <summary>
+    /// ID の読み直し回数。取りこぼしても既知の値が 1 回出れば認める。
+    ///
+    /// 実測で最悪 5 回に 1 回しか正しく読めない石がある。
+    /// 20 回なら、その石でも 0.8^20 ≒ 1.2% まで取り逃しが下がる。
+    /// </summary>
+    private const int FlashIdAttempts = 20;
 
     /// <summary>対応表にある石か。値は参照実装の対応表に合わせた。</summary>
     private static bool IsKnownFlash(GbaSaveType type, int id) => type switch
