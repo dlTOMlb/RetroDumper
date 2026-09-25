@@ -121,7 +121,7 @@
                                               Unchecked="GbaSaveWriteAllow_Changed"
                                               ToolTip="カートリッジのセーブデータを上書きします。ROM 領域には書き込めません。" />
                                     <TextBlock TextWrapping="Wrap" Foreground="#A00" FontSize="11" Margin="0,2,0,0"
-                                               Text="書き込むとカートリッジのセーブデータが置き換わります。書き込む前に、現在のセーブを自動で控えに残します。" />
+                                               Text="書き込むとカートリッジのセーブデータが置き換わります。書き込む前に現在のセーブを控えるので、失敗したらその場で元に戻せます。" />
                                     <Button x:Name="GbaSaveWriteButton" Content="セーブを書き込む" Click="GbaSaveWrite_Click"
                                             IsEnabled="False" Margin="0,6,0,0" Background="#FFE0E0" />
                                 </StackPanel>

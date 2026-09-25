@@ -452,7 +452,7 @@ public partial class MainWindow : Window
 
             // 照合できなかったときは、取りこぼさないよう控えを残す。
             // 吸い出しには時間がかかるうえ、原因を調べるには現物が要る。
-            // 保存ダイアログでどう選ばれても、これは手元に残る。
+            // ただし断りなく置くものではないので、開発中だけの働きにしてある。
             if (identified is null && result.ChecksumOk == false)
                 SaveRecoveryCopy(result.Rom, info.RomExtension);
 
@@ -1392,18 +1392,21 @@ public partial class MainWindow : Window
             var info = _info;
             var token = _cts.Token;
 
-            // 上書きする前に、今カートリッジに入っているものを控えに残す。
+            // 上書きする前に、今カートリッジに入っているものを読んでおく。
             // 取り違えて書いたとき、元に戻せる手立てがこれしかない。
-            Log("上書きする前に、現在のセーブを控えに残します。");
+            Log("上書きする前に、現在のセーブを控えます。");
 
             byte[] backup = await Task.Run(() => ReadSaveCore(link, info, target, null, token));
 
-            string backupPath = Path.Combine(
-                Path.GetDirectoryName(Environment.ProcessPath) ?? Directory.GetCurrentDirectory(),
-                $"save-backup-{DateTime.Now:yyyyMMdd-HHmmss}.sav");
+            // **ファイルとして残すのは開発中だけ。**
+            // 配布版では控えを持ったまま進み、書き込みに失敗したときに
+            // その場で書き戻すか、保存先を尋ねる。断りなく置かない。
+            string? backupPath = DebugArtifacts.Save(backup, "save-backup", ".sav");
 
-            await File.WriteAllBytesAsync(backupPath, backup);
-            Log($"控えを保存しました: {backupPath}");
+            Log(backupPath is not null
+                ? $"控えを保存しました: {backupPath}"
+                : $"現在のセーブ {backup.Length} バイトを控えました。" +
+                  "書き込みに失敗したら、その場で書き戻せます。");
 
             var confirm = MessageBox.Show(this,
                 "カートリッジのセーブデータを上書きします。\n\n" +
@@ -1411,7 +1414,10 @@ public partial class MainWindow : Window
                 $"書き込むファイル: {Path.GetFileName(open.FileName)}\n" +
                 $"大きさ: {data.Length} バイト\n\n" +
                 shortNote +
-                $"現在のセーブは次の場所に控えてあります。\n{backupPath}\n\n" +
+                (backupPath is not null
+                    ? $"現在のセーブは次の場所に控えてあります。\n{backupPath}\n\n"
+                    : "現在のセーブは控えてあります。" +
+                      "失敗したときは、その場で書き戻せます。\n\n") +
                 "書き込みを実行しますか？",
                 "セーブの書き込み", MessageBoxButton.YesNo, MessageBoxImage.Warning);
 
@@ -1468,27 +1474,38 @@ public partial class MainWindow : Window
     /// 書き込みに失敗したとき、控えを書き戻して元の状態に戻す。
     ///
     /// 照合に失敗した時点で、カートリッジのセーブは中途半端になっている。
-    /// 控えはファイルに残してあるが、画面を閉じてから気付くのでは遅い。
-    /// その場で戻せる道を用意しておく。
+    /// 画面を閉じてから気付くのでは遅いので、その場で戻せる道を用意しておく。
+    ///
+    /// <paramref name="backupPath"/> が <c>null</c> なら、控えはまだ
+    /// どこにも書かれていない（配布版）。書き戻さないなら、
+    /// 抱えたまま画面を閉じられる前に保存先を尋ねる。
     /// </summary>
     private async Task OfferRestoreAsync(
         IRfcaLink link, CartridgeInfo info, SaveTarget target,
-        byte[] backup, string backupPath,
+        byte[] backup, string? backupPath,
         IProgress<DumpProgress> progress, CancellationToken token)
     {
         var answer = MessageBox.Show(this,
             "書き込みに失敗しました。\n" +
             "カートリッジのセーブは中途半端な状態になっている可能性があります。\n\n" +
             "書き込む前の控えを書き戻して、元の状態に戻しますか？\n\n" +
-            $"控え: {backupPath}\n" +
+            (backupPath is not null ? $"控え: {backupPath}\n" : "") +
             $"大きさ: {backup.Length} バイト",
             "セーブの書き込み", MessageBoxButton.YesNo, MessageBoxImage.Error);
 
         if (answer != MessageBoxResult.Yes)
         {
-            Log($"控えは {backupPath} に残してあります。" +
-                "後から「セーブを書き込む」で選べば戻せます。");
-            ProgressText.Text = "書き込み失敗（控えは保存済み）";
+            string? kept = backupPath ?? await KeepBackupAsync(backup);
+
+            Log(kept is not null
+                ? $"控えは {kept} に残してあります。" +
+                  "後から「セーブを書き込む」で選べば戻せます。"
+                : "控えを保存しませんでした。" +
+                  "書き込む前の状態に戻す手立てはもうありません。");
+
+            ProgressText.Text = kept is not null
+                ? "書き込み失敗（控えは保存済み）"
+                : "書き込み失敗（控えは未保存）";
             return;
         }
 
@@ -1505,14 +1522,55 @@ public partial class MainWindow : Window
         {
             Log($"控えの書き戻しにも失敗しました: {ex.Message}");
 
+            string? kept = backupPath ?? await KeepBackupAsync(backup);
+
             MessageBox.Show(this,
                 "控えの書き戻しにも失敗しました。\n\n" +
-                $"控えは次の場所に残っています。\n{backupPath}\n\n" +
-                "カートリッジを挿し直してから、" +
-                "「セーブを書き込む」でこのファイルを選んでください。",
+                (kept is not null
+                    ? $"控えは次の場所に残っています。\n{kept}\n\n" +
+                      "カートリッジを挿し直してから、" +
+                      "「セーブを書き込む」でこのファイルを選んでください。"
+                    : "控えは保存されていません。\n\n" +
+                      "カートリッジを挿し直してから、もう一度書き込んでください。"),
                 "セーブの書き込み", MessageBoxButton.OK, MessageBoxImage.Error);
 
-            ProgressText.Text = "書き込み失敗（控えは保存済み）";
+            ProgressText.Text = kept is not null
+                ? "書き込み失敗（控えは保存済み）"
+                : "書き込み失敗（控えは未保存）";
+        }
+    }
+
+    /// <summary>
+    /// 書き戻さなかった控えを、消えてしまわないうちに手元へ残す。
+    ///
+    /// 開発中は EXE の横にすでにあるので、ここへは来ない。
+    /// 配布版は断りなく置かない代わりに、必要になったここで保存先を尋ねる。
+    /// 控えを抱えたまま画面を閉じられると、元に戻す手立てが無くなる。
+    /// </summary>
+    private async Task<string?> KeepBackupAsync(byte[] backup)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = "書き込む前のセーブ（控え）の保存先",
+            FileName = FileNaming.MakeRomFileName(_identifiedName ?? _info?.Title, ".sav"),
+            Filter = "セーブデータ (*.sav)|*.sav|すべてのファイル (*.*)|*.*",
+            AddExtension = true,
+            DefaultExt = "sav",
+        };
+
+        if (dialog.ShowDialog(this) != true) return null;
+
+        try
+        {
+            await File.WriteAllBytesAsync(dialog.FileName, backup);
+
+            return dialog.FileName;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log($"控えを保存できませんでした: {ex.Message}");
+
+            return null;
         }
     }
 
@@ -1542,27 +1600,20 @@ public partial class MainWindow : Window
     /// 原因が読み違いなのか未収録なのかは、現物を見ないと分からない。
     /// 保存ダイアログを閉じてしまうと調べる手立てが無くなるので、
     /// 利用者の選択とは別に、解析用の 1 本を確保しておく。
+    ///
+    /// **これは開発中だけの働き。**配布版では何もしない。
+    /// 吸い出したものはこのあとの保存ダイアログで受け取れるので、
+    /// 断りなく EXE の横に置く理由がない。
     /// </summary>
     private void SaveRecoveryCopy(byte[] rom, string extension)
     {
-        try
-        {
-            string dir = Path.GetDirectoryName(Environment.ProcessPath)
-                ?? Directory.GetCurrentDirectory();
+        if (!DebugArtifacts.Enabled) return;
 
-            string path = Path.Combine(
-                dir,
-                $"unmatched-{DateTime.Now:yyyyMMdd-HHmmss}" +
-                (extension is { Length: > 0 } ? extension : ".bin"));
+        string? path = DebugArtifacts.Save(rom, "unmatched", extension);
 
-            File.WriteAllBytes(path, rom);
-
-            Log($"照合できなかったため、解析用の控えを保存しました: {path}");
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Log($"解析用の控えを保存できませんでした: {ex.Message}");
-        }
+        Log(path is not null
+            ? $"照合できなかったため、解析用の控えを保存しました: {path}"
+            : "解析用の控えを残そうとしましたが、保存できませんでした。");
     }
 
     /// <summary>
