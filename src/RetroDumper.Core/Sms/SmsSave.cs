@@ -79,6 +79,57 @@ public static class SmsSave
     }
 
     /// <summary>
+    /// 大きさが分かっているときに、その分だけ読む。
+    ///
+    /// <see cref="Read"/> は内容を見比べて容量を決めるため、
+    /// **全面が同じ値だと 8KB と誤る。**窓の中身が区別できないからで、
+    /// 折り返して同じものが見えているのか、本当に同じものが
+    /// 書かれているのかを、内容からは判別できない。
+    ///
+    /// 消去したあとの読み戻しがまさにそれにあたる。
+    /// 書いた長さが分かっている照合では、こちらを使う。
+    /// </summary>
+    public static byte[] ReadExact(
+        IRfcaLink link, int size,
+        IProgress<DumpProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (size <= 0 || size > MaxSize)
+            throw new RfcaException(
+                $"読み出す大きさが範囲外です。1 から {MaxSize} バイトのところ " +
+                $"{size} バイトを指定されました。");
+
+        var buffer = new byte[size];
+        int done = 0;
+
+        try
+        {
+            for (int bank = 0; done < size; bank++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                SetControl(link, bank == 0 ? EnableBank0 : EnableBank1);
+
+                for (uint window = WindowLow; window <= WindowHigh && done < size; window += HalfSize)
+                {
+                    int length = Math.Min(HalfSize, size - done);
+
+                    link.Read(RfcaOpcode.SmsRead, window, buffer.AsSpan(done, length));
+                    done += length;
+
+                    progress?.Report(new DumpProgress("セーブ読み出し", done, size));
+                }
+            }
+        }
+        finally
+        {
+            SetControl(link, Disable);
+        }
+
+        return buffer;
+    }
+
+    /// <summary>
     /// セーブを書き、読み戻して照合する。
     ///
     /// **参照実装はここで前半を書き漏らしている。**
@@ -125,12 +176,11 @@ public static class SmsSave
 
         progress?.Report(new DumpProgress("書き込んだ内容を照合中", 0, data.Length));
 
-        var readBack = Read(link, progress, cancellationToken);
-
-        if (readBack.Length != data.Length)
-            throw new RfcaException(
-                $"照合に失敗しました。{data.Length} バイト書いたはずですが、" +
-                $"読み戻すと {readBack.Length} バイトになりました。");
+        // **ここで Read を使ってはいけない。**
+        // Read は内容を見比べて容量を決めるので、消去のように
+        // 全面が同じ値だと 8KB と誤り、32KB 書いても照合に失敗する。
+        // 書いた長さは分かっているのだから、それに合わせて読む。
+        var readBack = ReadExact(link, data.Length, progress, cancellationToken);
 
         for (int i = 0; i < data.Length; i++)
             if (readBack[i] != data[i])

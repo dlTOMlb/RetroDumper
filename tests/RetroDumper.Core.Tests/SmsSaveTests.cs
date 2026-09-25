@@ -82,6 +82,41 @@ public sealed class SmsSaveTests
         Assert.Equal(data.AsSpan(0, 0x4000).ToArray(), cart.Snapshot().AsSpan(0, 0x4000).ToArray());
     }
 
+    /// <summary>
+    /// **全面が同じ値でも、指定した長さだけ読めること。**
+    ///
+    /// Read は内容を見比べて容量を決めるので、一様なデータでは
+    /// 窓の区別がつかず 8KB と答える。消去したあとの読み戻しがこれにあたり、
+    /// Read で照合すると 32KB 書いても「8KB しか読めない」と言われる。
+    /// 書いた長さが分かっている照合では ReadExact を使う。
+    /// </summary>
+    [Theory]
+    [InlineData(0x2000)]
+    [InlineData(0x4000)]
+    [InlineData(0x8000)]
+    public void 一様でも指定した長さだけ読める(int size)
+    {
+        var uniform = new byte[0x8000];
+        Array.Fill(uniform, (byte)0xFF);
+
+        var cart = new FakeSmsCart(uniform);
+
+        Assert.Equal(size, SmsSave.ReadExact(cart, size).Length);
+    }
+
+    /// <summary>同じ理由で、消去の書き込みが照合まで通ること。</summary>
+    [Fact]
+    public void 全面を同じ値で消せる()
+    {
+        var cart = new FakeSmsCart(Pattern(0x8000)) { AllowSaveWrites = true };
+        var blank = new byte[0x8000];
+        Array.Fill(blank, (byte)0xFF);
+
+        SmsSave.Write(cart, blank);
+
+        Assert.Equal(blank, cart.Snapshot());
+    }
+
     /// <summary>終わったら $FFFC を 0 に戻すこと。有効のまま放置しない。</summary>
     [Fact]
     public void 終了時にRAMを無効へ戻す()

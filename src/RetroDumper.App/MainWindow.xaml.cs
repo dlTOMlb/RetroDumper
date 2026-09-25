@@ -950,6 +950,7 @@ public partial class MainWindow : Window
         if (_link is not null) _link.AllowSaveWrites = allow;
 
         GbaSaveWriteButton.IsEnabled = allow && _link is not null;
+        SaveEraseButton.IsEnabled = allow && _link is not null;
 
         Log(allow
             ? "セーブデータの書き込みを許可しました。ROM 領域には書き込めません。"
@@ -1574,6 +1575,146 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// カートリッジのセーブを全面同じ値で埋める。
+    ///
+    /// 埋める値は利用者が選ぶ。既定は 0xFF。
+    /// フラッシュと EEPROM は 0xFF が消去済みの状態そのもので、
+    /// 0x00 を書くのは全ビットを焼くことになり消去の逆になる。
+    /// SRAM・FRAM には消去状態が無いので、どちらでも等価。
+    ///
+    /// **消す大きさは、申告値ではなく読み戻せた長さに合わせる。**
+    /// マークIII / ゲームギアは容量を申告しないので、
+    /// 読んで初めて 8KB / 16KB / 32KB のどれかが分かる。
+    /// 上限の 32KB を書きにいくと、載っていない領域へ回り込んで
+    /// 折り返した先を潰しかねない。
+    /// </summary>
+    private async void SaveErase_Click(object sender, RoutedEventArgs e)
+    {
+        if (_link is null) return;
+
+        if (GbaSaveWriteAllowCheck.IsChecked != true)
+        {
+            Log("セーブデータの書き込みが許可されていません。");
+            return;
+        }
+
+        _cts = new CancellationTokenSource();
+        SetBusy(true);
+        CancelButton.IsEnabled = true;
+
+        try
+        {
+            var target = await ResolveSaveTargetAsync();
+            if (target is null || _info is null) return;
+
+            byte filler = SaveEraseValueCombo.SelectedIndex == 1 ? (byte)0x00 : (byte)0xFF;
+
+            var link = _link;
+            var info = _info;
+            var token = _cts.Token;
+
+            // 消す前に、今入っているものを読む。
+            // 控えであると同時に、消す大きさもここで決まる。
+            Log("消去する前に、現在のセーブを控えます。");
+
+            byte[] backup = await Task.Run(() => ReadSaveCore(link, info, target, null, token));
+
+            if (backup.Length == 0)
+            {
+                Log("セーブを読み出せませんでした。消去は行いません。");
+                return;
+            }
+
+            // **控えを必ず手元に残してから消す。**
+            // 書き込みと違って、消去は元のファイルが手元に無い。
+            // ここで残しそびれると、戻す手立ては何も残らない。
+            string? backupPath = DebugArtifacts.Save(backup, "save-erase-backup", ".sav")
+                ?? await KeepBackupAsync(backup);
+
+            if (backupPath is not null)
+            {
+                Log($"控えを保存しました: {backupPath}");
+            }
+            else
+            {
+                var anyway = MessageBox.Show(this,
+                    "控えを保存しませんでした。\n\n" +
+                    "このまま消去すると、今カートリッジに入っているセーブは元に戻せません。\n\n" +
+                    "控えなしで消去しますか？",
+                    "セーブの消去", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+                if (anyway != MessageBoxResult.Yes)
+                {
+                    Log("消去を中止しました。");
+                    return;
+                }
+
+                Log("控えなしで消去します。");
+            }
+
+            var confirm = MessageBox.Show(this,
+                "カートリッジのセーブを消去します。\n\n" +
+                $"対象: {target.Label}\n" +
+                $"消す大きさ: {backup.Length} バイト\n" +
+                $"埋める値: 0x{filler:X2}\n\n" +
+                (backupPath is not null
+                    ? $"消す前のセーブは次の場所に控えてあります。\n{backupPath}\n\n"
+                    : "控えはありません。元に戻せません。\n\n") +
+                "消去しますか？",
+                "セーブの消去", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+            if (confirm != MessageBoxResult.Yes)
+            {
+                Log("消去を中止しました。");
+                return;
+            }
+
+            var progress = new Progress<DumpProgress>(p =>
+            {
+                DumpProgressBar.Value = p.Ratio;
+                ProgressText.Text = $"{p.Stage}  {FormatBytes(p.BytesDone)} / {FormatBytes(p.BytesTotal)}";
+            });
+
+            var blank = new byte[backup.Length];
+            Array.Fill(blank, filler);
+
+            try
+            {
+                await Task.Run(() => WriteSaveCore(link, info, target, blank, progress, token));
+            }
+            catch (RfcaException ex)
+            {
+                // 途中で止まると、セーブは消えかけの状態になっている。
+                // 書き込みと同じく、その場で控えを書き戻せるようにする。
+                Log($"セーブの消去に失敗しました: {ex.Message}");
+
+                await OfferRestoreAsync(link, info, target, backup, backupPath, progress, token);
+                return;
+            }
+
+            Log($"セーブを 0x{filler:X2} で消去し、読み戻して確認しました。");
+            ProgressText.Text = "セーブの消去完了";
+        }
+        catch (OperationCanceledException)
+        {
+            Log("セーブの消去を中止しました。");
+        }
+        catch (Exception ex)
+        {
+            Log($"セーブの消去に失敗しました: {ex.Message}");
+            MessageBox.Show(this, ex.Message, "セーブの消去",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _cts?.Dispose();
+            _cts = null;
+            CancelButton.IsEnabled = false;
+            SetBusy(false);
+        }
+    }
+
     private void SetBusy(bool busy)
     {
         bool live = !busy && _link is not null;
@@ -1589,6 +1730,7 @@ public partial class MainWindow : Window
         GbaSaveReadButton.IsEnabled = live;
         GbaSaveWriteAllowCheck.IsEnabled = live;
         GbaSaveWriteButton.IsEnabled = live && GbaSaveWriteAllowCheck.IsChecked == true;
+        SaveEraseButton.IsEnabled = live && GbaSaveWriteAllowCheck.IsChecked == true;
         AutoDetectPortButton.IsEnabled = !busy && _link is null;
 
         Cursor = busy ? Cursors.Wait : null;
