@@ -9,6 +9,7 @@
     <AssemblyName>RetroDumper</AssemblyName>
     <RootNamespace>RetroDumper.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <!--
