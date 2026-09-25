@@ -71,7 +71,13 @@ dotnet publish src/RetroDumper.App -c Release -r win-x64 --self-contained true -
 | GB | HuC1 32KB | ポケモンカードGB |
 
 未確認: GBA のフラッシュ 64KB、GB の MBC2 / MBC6 / HuC3 / ポケットカメラ、
-スーパーファミコン全般。FRAM 32KB は SRAM と同じ経路なので別途の確認は不要です。
+スーパーファミコン全般、マークIII / ゲームギア。
+FRAM 32KB は SRAM と同じ経路なので別途の確認は不要です。
+
+**マークIII / ゲームギアは ROM の吸い出しも含めて実機で確認できていません。**
+手元にソフトが無いためです。実装はしてありますが、
+他機種では実機で試すたびに何かしら食い違いが見つかっています。
+初めて使うときは、吸い出した ROM を No-Intro と照合して確かめてください。
 
 保存名は No-Intro で特定した名前を使います
 （`POKEMON EMER` ではなく `Pocket Monsters - Emerald (Japan).sav`）。

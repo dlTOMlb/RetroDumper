@@ -71,6 +71,11 @@ public static class SaveMemory
                 (opcode == RfcaOpcode.SnesWrite && IsSnesSram(address))
                 || (opcode == RfcaOpcode.SnesExWrite && IsSnesExSram(address)),
 
+            // マークIII / ゲームギアのカートリッジ RAM。$8000-$BFFF に現れる。
+            // $FFFC で有効化してから読み書きする（そちらはバンクレジスタ扱い）。
+            CartridgeKind.MarkIIIOrGameGear =>
+                opcode == RfcaOpcode.SmsWrite && address is >= 0x8000 and <= 0xBFFF,
+
             // GBA は専用 opcode 以外を認めない。番地で許すことはしない。
             CartridgeKind.GameBoyAdvance => false,
 

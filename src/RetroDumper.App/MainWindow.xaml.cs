@@ -10,6 +10,7 @@ using RetroDumper.Core.Gb;
 using RetroDumper.Core.Gba;
 using RetroDumper.Core.Nes;
 using RetroDumper.Core.Probe;
+using RetroDumper.Core.Sms;
 using RetroDumper.Core.Snes;
 using RetroDumper.Core.Transport;
 using RetroDumper.Core.Util;
@@ -1103,6 +1104,14 @@ public partial class MainWindow : Window
                     _info.SaveMemorySize, GbaSaveType.None);
             }
 
+            case CartridgeKind.MarkIIIOrGameGear:
+            {
+                await EnsureIdentifiedNameAsync();
+
+                // 容量は申告されない。読んだ内容から決まるので、ここでは上限を渡す。
+                return new SaveTarget("マークIII / ゲームギア セーブ", SmsSave.MaxSize, GbaSaveType.None);
+            }
+
             default:
                 Log($"{_info.Kind.ToDisplayName()} のセーブ読み書きには対応していません。");
                 return null;
@@ -1123,6 +1132,8 @@ public partial class MainWindow : Window
             CartridgeKind.GameBoy =>
                 GbSave.Read(link, info.GbCartridgeType!.Value, target.Size, progress, token),
 
+            CartridgeKind.MarkIIIOrGameGear => SmsSave.Read(link, progress, token),
+
             _ => throw new RfcaException("この機種のセーブ読み出しには対応していません。"),
         };
 
@@ -1142,6 +1153,10 @@ public partial class MainWindow : Window
 
             case CartridgeKind.GameBoy:
                 GbSave.Write(link, info.GbCartridgeType!.Value, data, progress, token);
+                break;
+
+            case CartridgeKind.MarkIIIOrGameGear:
+                SmsSave.Write(link, data, progress, token);
                 break;
 
             default:
@@ -1225,7 +1240,7 @@ public partial class MainWindow : Window
             // ヘッダの名前ではなく、No-Intro で特定した名前を使う。
             // "POKEMON EMER" より "Pocket Monsters - Emerald (Japan)" のほうが、
             // あとからファイルを見たときに何のセーブか分かる。
-            string saveName = _identifiedName ?? _info?.Title;
+            string? saveName = _identifiedName ?? _info?.Title;
 
             var dialog = new SaveFileDialog
             {

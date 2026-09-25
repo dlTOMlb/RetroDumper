@@ -105,7 +105,7 @@ public sealed class SmsDumper : ICartridgeDumper
         IProgress<DumpProgress>? progress,
         CancellationToken cancellationToken)
     {
-        int bankCount = (int)((info.RomSize + BankSize - 1) / BankSize);
+        int bankCount = (int)((info.RomSize + ReadBankSize - 1) / ReadBankSize);
         var rom = new byte[info.RomSize];
         long done = 0;
 
@@ -113,14 +113,14 @@ public sealed class SmsDumper : ICartridgeDumper
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            SelectFrame2Bank(link, bank);
-
-            int length = (int)Math.Min(BankSize, info.RomSize - done);
+            int length = (int)Math.Min(ReadBankSize, info.RomSize - done);
             long captured = done;
+
+            uint at = SelectReadBank(link, bank);
 
             byte[] part = BulkReader.Read(
                 link, RfcaOpcode.SmsRead, length,
-                offsetInBank => (uint)(Frame2Base + offsetInBank),
+                offsetInBank => at + (uint)offsetInBank,
                 options, $"ROM 読み出し (バンク {bank}/{bankCount})",
                 new BankProgress(progress, captured, info.RomSize),
                 cancellationToken);
@@ -137,11 +137,35 @@ public sealed class SmsDumper : ICartridgeDumper
         };
     }
 
-    /// <summary>フレーム 2 ($8000-$BFFF) に指定バンクを貼る。</summary>
-    private static void SelectFrame2Bank(IRfcaLink link, int bank)
+    /// <summary>読み出す 1 バンクの大きさ。8KB。</summary>
+    private const int ReadBankSize = 0x2000;
+
+    /// <summary>
+    /// 指定バンクを読める位置に貼り、読み出し先のアドレスを返す。
+    ///
+    /// 手順は参照実装に合わせた。先頭 48KB（バンク 0-5）は $0000-$BFFF に
+    /// そのまま出ているので、フレーム 2 をバンク 2 に固定して素直に読む。
+    /// それ以降は $FFFF に 16KB 単位のバンク番号を書き、
+    /// $8000 / $A000 の窓から読む。
+    ///
+    /// 以前は $FFFC に 0x80 を書いてから貼っていたが、
+    /// 参照実装はそれを行っていない。$FFFC は RAM の有効化とバンク選択の
+    /// レジスタで、ROM を読むのに触る必要がない。
+    /// </summary>
+    private static uint SelectReadBank(IRfcaLink link, int bank)
     {
-        link.WriteBankRegister(CartridgeKind.MarkIIIOrGameGear, RfcaOpcode.SmsWrite, RegControl, 0x80);
-        link.WriteBankRegister(CartridgeKind.MarkIIIOrGameGear, RfcaOpcode.SmsWrite, RegFrame2, (byte)bank);
+        if (bank < 6)
+        {
+            link.WriteBankRegister(
+                CartridgeKind.MarkIIIOrGameGear, RfcaOpcode.SmsWrite, RegFrame2, 2);
+
+            return (uint)(bank * ReadBankSize);
+        }
+
+        link.WriteBankRegister(
+            CartridgeKind.MarkIIIOrGameGear, RfcaOpcode.SmsWrite, RegFrame2, (byte)(bank / 2));
+
+        return (uint)((4 + bank % 2) * ReadBankSize);
     }
 
     /// <summary>フレーム 1 ($4000-$7FFF) に指定バンクを貼る。</summary>
@@ -178,8 +202,7 @@ public sealed class SmsDumper : ICartridgeDumper
         byte[] head;
         try
         {
-            SelectFrame2Bank(link, 0);
-            head = link.Read(RfcaOpcode.SmsRead, Frame2Base, 0x40);
+            head = link.Read(RfcaOpcode.SmsRead, SelectReadBank(link, 0), 0x40);
         }
         catch (RfcaException)
         {
@@ -191,8 +214,8 @@ public sealed class SmsDumper : ICartridgeDumper
         {
             try
             {
-                SelectFrame2Bank(link, banks);
-                var probe = link.Read(RfcaOpcode.SmsRead, Frame2Base, 0x40);
+                // 16KB バンク換算で倍々に試す。読み出しは 8KB 単位なので 2 倍する。
+                var probe = link.Read(RfcaOpcode.SmsRead, SelectReadBank(link, banks * 2), 0x40);
                 if (probe.AsSpan().SequenceEqual(head))
                     return (long)banks * BankSize;
             }
