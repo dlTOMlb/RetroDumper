@@ -189,6 +189,42 @@ public sealed class GbSaveTests
         Assert.True(GbSave.IsMbc2(cartType));
     }
 
+    /// <summary>
+    /// **HuC1 / HuC3 / ポケットカメラはバンク切り替えを伴う。**
+    ///
+    /// 参照実装はこれらに専用の手順を持たず、基底クラスのまま
+    /// 上限 8KB の素通し扱いにしている。だが実機のポケモンカードGB（HuC1）は
+    /// セーブが 32KB あり、その形では「大きすぎる」として読めない
+    /// （2026-09-25 実機）。資料でも HuC1 は MBC1 相当で、
+    /// $0000-$1FFF で RAM を有効化し $4000 でバンクを選ぶ。
+    /// </summary>
+    [Theory]
+    [InlineData((byte)0xFF)]   // HuC1
+    [InlineData((byte)0xFE)]   // HuC3
+    [InlineData((byte)0xFC)]   // ポケットカメラ
+    public void HuC系は32KBまで扱える(byte cartType)
+        => Assert.True(GbSave.MaxSize(cartType) >= 0x8000);
+
+    [Fact]
+    public void HuC1はバンクを切り替えて読む()
+    {
+        var cart = new FakeGbSaveCartridge(0x8000, 0xFF) { AllowSaveWrites = true };
+        cart.Preset(Pattern(0x8000));
+
+        Assert.Equal(Pattern(0x8000), GbSave.Read(cart, 0xFF, 0x8000));
+
+        // 有効化したままにしない。
+        Assert.False(cart.RamLeftEnabled);
+    }
+
+    /// <summary>MBC を持たない ROM+RAM は素通し。上限 8KB のまま。</summary>
+    [Theory]
+    [InlineData((byte)0x00)]
+    [InlineData((byte)0x08)]
+    [InlineData((byte)0x09)]
+    public void MBCなしは8KBまで(byte cartType)
+        => Assert.Equal(0x2000, GbSave.MaxSize(cartType));
+
     [Fact]
     public void 許可していなければ書き込めない()
     {

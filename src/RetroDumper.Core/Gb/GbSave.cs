@@ -9,9 +9,14 @@ namespace RetroDumper.Core.Gb;
 /// **手順は MBC ごとに違う。**値も段取りも参照実装の
 /// 参照実装の MBC ごとの実装に合わせてある。推測で共通化しない。
 ///
-///   None / HuC1 / HuC3 / ポケットカメラ
+///   None（MBC なしの ROM+RAM）
 ///       RAM の有効化もバンク切り替えも行わず、$A000 から素直に読み書きする。
 ///       上限 8KB。
+///
+///   HuC1 / HuC3 / ポケットカメラ
+///       MBC3 と同じ段取り。$00FF へ 0x0A、$4000 でバンク、$A000 から 8KB ずつ。
+///       **ここだけ参照実装と違える。**参照実装はこれらを上限 8KB の
+///       素通し扱いにしているが、それではポケモンカードGB（HuC1、32KB）が読めない。
 ///
 ///   MBC1
 ///       先に $6000 へ 1 を書いて RAM バンク切り替えモードにする。
@@ -61,6 +66,24 @@ public static class GbSave
     private static readonly Profile Mbc6 = new("MBC6", true, 0x0400, 0x1000, 0x8000);
 
     /// <summary>
+    /// HuC1 / HuC3 / ポケットカメラ。
+    ///
+    /// **ここは参照実装と違えてある。**
+    /// 参照実装はこれらに専用の手順を持たず、基底クラスのまま
+    /// 「RAM の有効化もバンク切り替えも行わず $A000 から 8KB まで」を使う。
+    /// だが実機のポケモンカードGB（HuC1）はセーブが 32KB あり、
+    /// その形では 8KB を超えるとして読めない（2026-09-25 実機）。
+    ///
+    /// ハードウェアの資料では HuC1 は MBC1 相当で、
+    /// $0000-$1FFF で RAM を有効化し、$4000 でバンクを選ぶ。
+    /// MBC3 と同じ段取りで扱う。HuC3 とポケットカメラも同じ構えなので揃える。
+    /// </summary>
+    private static readonly Profile HuC = new("HuC", true, 0x4000, 0x2000, 0x20000);
+
+    private static readonly Profile PocketCamera =
+        new("ポケットカメラ", true, 0x4000, 0x2000, 0x20000);
+
+    /// <summary>
     /// カートリッジ種別（ヘッダ 0x147）から段取りを決める。
     /// 対応が無ければ null。
     /// </summary>
@@ -72,7 +95,8 @@ public static class GbSave
         >= 0x0F and <= 0x13 => Mbc3,
         >= 0x19 and <= 0x1E => Mbc5,
         0x20 => Mbc6,
-        0xFC or 0xFE or 0xFF => Plain,                  // ポケットカメラ / HuC3 / HuC1
+        0xFC => PocketCamera,
+        0xFE or 0xFF => HuC,                            // HuC3 / HuC1
         _ => null,
     };
 

@@ -68,8 +68,9 @@ dotnet publish src/RetroDumper.App -c Release -r win-x64 --self-contained true -
 | GB | MBC1 8KB | カエルの為に鐘は鳴る |
 | GB | MBC3 32KB | ポケットモンスター ピカチュウ |
 | GBC | MBC5 32KB | ゼルダの伝説 夢をみる島 DX |
+| GB | HuC1 32KB | ポケモンカードGB |
 
-未確認: GBA のフラッシュ 64KB、GB の MBC2 / MBC6 / HuC1 / HuC3 / ポケットカメラ、
+未確認: GBA のフラッシュ 64KB、GB の MBC2 / MBC6 / HuC3 / ポケットカメラ、
 スーパーファミコン全般。FRAM 32KB は SRAM と同じ経路なので別途の確認は不要です。
 
 保存名は No-Intro で特定した名前を使います
