@@ -8,7 +8,7 @@ namespace RetroDumper.Core.Snes;
 ///
 /// 窓の位置も転送量も使う opcode もマッパーごとに違う。
 /// 配置は <see cref="SnesAddressMap.SramLayout"/> にまとめてあり、
-/// 値は RetroFreakDumper の Snes.SaveDataController 各実装に合わせた。
+/// 値は参照実装の Snes.SaveDataController 各実装に合わせた。
 ///
 /// **LoROM は読みと書きでバンクが違う。**読みは $70 以降、書きは $F0 以降。
 /// 同じ SRAM の別の見え方で、参照実装がこの 2 つを使い分けている。

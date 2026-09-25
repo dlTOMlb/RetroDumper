@@ -244,7 +244,7 @@ public class SnesDumperTests
     ///
     /// 以前は $20 以降としていたが、実機で確かめたものではなかった。
     /// $20 も $30 も同じ SRAM の見え方だが、動作実績のある
-    /// RetroFreakDumper が $30 を使っているので、そちらに合わせる。
+    /// 参照実装が $30 を使っているので、そちらに合わせる。
     /// </summary>
     [Fact]
     public void SramLayout_HiRom_UsesEightKilobyteWindows()

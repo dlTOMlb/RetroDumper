@@ -6,7 +6,7 @@ namespace RetroDumper.Core.Gb;
 /// <summary>
 /// ゲームボーイ / ゲームボーイカラーの外部 RAM（セーブ）の読み書き。
 ///
-/// **手順は MBC ごとに違う。**値も段取りも RetroFreakDumper の
+/// **手順は MBC ごとに違う。**値も段取りも参照実装の
 /// Gb.SaveDataController 各実装に合わせてある。推測で共通化しない。
 ///
 ///   None / HuC1 / HuC3 / ポケットカメラ

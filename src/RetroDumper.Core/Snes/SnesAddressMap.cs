@@ -103,7 +103,7 @@ public static class SnesAddressMap
     /// セーブ RAM のアクセス方法。
     ///
     /// マッパーごとにバンクも 1 回あたりの転送量も、使う opcode も違う。
-    /// 値は RetroFreakDumper の Snes.SaveDataController 各実装に合わせた。
+    /// 値は参照実装の Snes.SaveDataController 各実装に合わせた。
     /// 推測で決めると、読めているように見えて別の場所を触ることになる。
     ///
     /// **LoROM は読みと書きでバンクが違う。**

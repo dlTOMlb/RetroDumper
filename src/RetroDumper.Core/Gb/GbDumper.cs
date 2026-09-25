@@ -20,7 +20,7 @@ public sealed class GbDumper : ICartridgeDumper
     public string Name => "ゲームボーイ / ゲームボーイカラー";
     public CartridgeKind Kind => CartridgeKind.GameBoy;
 
-    // opcode は RetroFreakDumper.exe の逆コンパイルで確定済み。
+    // opcode は参照実装の逆コンパイルで確定済み。
     // 以前は探索頼みで未確定だったため、使えるかどうかの分岐が必要だった。
     public bool IsReady => true;
 
@@ -201,7 +201,7 @@ public sealed class GbDumper : ICartridgeDumper
 
     /// <summary>
     /// セーブ RAM を読む。手順は MBC ごとに違うので <see cref="GbSave"/> に任せる。
-    /// 値も段取りも RetroFreakDumper の各コントローラに合わせてある。
+    /// 値も段取りも参照実装の各コントローラに合わせてある。
     /// </summary>
     private static byte[] DumpSaveRam(
         IRfcaLink link,

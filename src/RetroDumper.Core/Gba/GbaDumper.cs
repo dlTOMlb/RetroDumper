@@ -239,7 +239,7 @@ public sealed class GbaDumper : ICartridgeDumper
     ///
     /// 以前はミラーとワードアドレス残留値だけを見ていたため、
     /// **どちらにも当たらず常に最大容量 32MB を返していた**。
-    /// 本家 RetroFreakDumper も 0xFF 埋めを終端判定に使っている
+    /// 参照実装も 0xFF 埋めを終端判定に使っている
     /// （AutoDump 内の CheckFill(0xFF, ...)）。
     ///
     /// 1 ブロックだけ見ると、たまたま 0xFF で埋まった領域を終端と誤判定しうる。
@@ -403,7 +403,7 @@ public sealed class GbaDumper : ICartridgeDumper
 
     /// <summary>
     /// GBA のリードは 32KB ブロック単位。利用者が指定した転送サイズは使わず、
-    /// ここで必ず揃える（RetroFreakDumper も 32768 固定）。
+    /// ここで必ず揃える（参照実装も 32768 固定）。
     /// </summary>
     private static DumpOptions CloneWithBlockSize(DumpOptions source) => new()
     {

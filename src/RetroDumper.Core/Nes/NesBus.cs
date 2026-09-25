@@ -47,7 +47,7 @@ public sealed class NesBus(IRfcaLink link)
         // GBA のリードで、ACK の後に状態要求を送らないとデータが流れてこないのと
         // 同じ構造で、この機種は書き込みにも「つつき」を必要とする。
         //
-        // 根拠: RetroFreakDumper の NesScriptBase.CpuWrite が、
+        // 根拠: 参照実装の NesScriptBase.CpuWrite が、
         // NesCpuWrite の直後に必ず NesCpuRead(0x8000, 8) を送っている。
         _link.Read(RfcaOpcode.NesCpuRead, PokeAddress, PokeSize);
     }

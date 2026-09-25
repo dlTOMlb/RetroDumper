@@ -3,7 +3,7 @@ namespace RetroDumper.Core.Transport;
 /// <summary>
 /// RFCA のコマンド opcode。
 ///
-/// 2026-09-23、動作実績のある RetroFreakDumper.exe（.NET アセンブリ）を
+/// 2026-09-23、動作実績のある参照実装（.NET アセンブリ）を
 /// 逆コンパイルして全表を確定した。値は同ソースの
 /// RetroFreak.CommandClass の各クラスが基底に渡している番号そのもの。
 /// 以前は実機での総当たり探索に頼っており、いくつか誤った値を使っていた。

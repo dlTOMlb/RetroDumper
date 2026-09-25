@@ -198,7 +198,7 @@ PC ← RFCA : 状態応答 (12B)
 ### opcode
 
 opcode はスロットごとに別番号が割り当てられています。
-**全表は RetroFreakDumper.exe（.NET アセンブリ）の逆コンパイルで確定**しました。
+**全表は参照実装（.NET アセンブリ）の逆コンパイルで確定**しました。
 値は `RetroFreak.CommandClass` の各クラスが基底に渡している番号そのものです。
 
 **制御コマンド**（フレーム長が用途ごとに違う点に注意）
@@ -407,7 +407,7 @@ Crash Bandicoot Advance (ACUJ) での実測:
 
 ミラー（先頭への折り返し）もワードアドレスの残留値も起きませんでした。
 候補サイズ N の先 `[N, 2N)` を 8 点サンプルし、**すべて `0xFF` のときだけ**
-終端とみなします。本家 RetroFreakDumper も `CheckFill(0xFF, ...)` で
+終端とみなします。参照実装も `CheckFill(0xFF, ...)` で
 同じ判定をしています。
 
 確実を期すなら **No-Intro DAT による照合**を使ってください（→「No-Intro DAT」）。

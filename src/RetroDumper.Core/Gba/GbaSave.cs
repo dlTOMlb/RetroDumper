@@ -22,7 +22,7 @@ public enum GbaSaveType
 /// GBA のカートリッジはセーブ装置の種類をヘッダで申告しない。
 /// 代わりに、ROM の中に開発キットのライブラリが残した目印の文字列がある。
 /// "SRAM_V" や "FLASH1M_V" といった並びで、これを探して種類を決める。
-/// 手順は RetroFreakDumper の SaveDataController 各実装に合わせた。
+/// 手順は参照実装の SaveDataController 各実装に合わせた。
 ///
 /// **書き込みはセーブ専用の opcode だけを使う。**
 /// GBA は ROM とセーブで opcode が別系統になっており、
@@ -244,7 +244,7 @@ public static class GbaSave
                 $"{DisplayName(type)} は {size} バイトですが、{data.Length} バイト渡されました。");
 
         // 装置より小さいファイルは、その分だけ書く。残りは触らない。
-        // RetroFreakDumper も同じ扱いで、短いファイルを拒まない。
+        // 参照実装も同じ扱いで、短いファイルを拒まない。
         //
         // ただし EEPROM は別。容量によって通信のアドレス幅が変わるため、
         // 「8KB の装置に 512 バイトだけ書く」という操作は成立しない。

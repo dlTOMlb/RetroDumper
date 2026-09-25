@@ -267,7 +267,7 @@ public sealed class Namcot108Mapper : NesMapper
     {
         // R2 の窓 ($1000-$13FF) だけを使い、1KB ずつ動かして読む。
         // 窓を 4 つ並べて 4KB まとめて読むこともできるが、
-        // RetroFreakDumper はこの 1KB ずつの形を採っている。合わせておく。
+        // 参照実装はこの 1KB ずつの形を採っている。合わせておく。
         Select(bus, 0x02, (byte)bank);
         return bus.PpuRead(0x1000, size);
     }

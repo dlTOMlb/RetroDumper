@@ -300,7 +300,7 @@ public class GbaFrameContractTests
         };
 
     /// <summary>
-    /// opcode 表は RetroFreakDumper.exe の逆コンパイルで確定したもの。
+    /// opcode 表は参照実装の逆コンパイルで確定したもの。
     ///
     /// 以前ここには 0x20 / ヘッダ値 0x00 / 512 バイトと書いてあったが、
     /// **3 つとも間違い**だった。0x20 は GBA の SRAM リードで、

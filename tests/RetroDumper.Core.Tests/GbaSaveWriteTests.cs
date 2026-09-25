@@ -84,7 +84,7 @@ public sealed class GbaSaveWriteTests
 
     /// <summary>
     /// 装置より小さいファイルは、その分だけ書く。残りは触らない。
-    /// 参照実装 (RetroFreakDumper) も短いファイルを拒まない。
+    /// 参照実装も短いファイルを拒まない。
     /// </summary>
     [Fact]
     public void 装置より小さければその分だけ書く()

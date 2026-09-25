@@ -85,7 +85,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     public RfcaLink(string portName)
     {
         PortName = portName;
-        // 設定は RetroFreakDumper (MainForm) に合わせる。
+        // 設定は参照実装 (MainForm) に合わせる。
         //
         // **バッファの大きさが効く。**既定の送信バッファは 2048 バイトしかなく、
         // フラッシュの 4096 バイト書き込みが収まらない。ドライバが吐き出すまで
@@ -245,7 +245,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// フレーム 2 つ目のフィールド。全スロット共通で 8。
     ///
     /// 「GBA だけ 0x00 でないと受け付けない」と書いていた時期があるが誤り。
-    /// RetroFreakDumper も全コマンドで 8 を入れている。
+    /// 参照実装も全コマンドで 8 を入れている。
     /// 引数として残してあるのは、調査で値を振れるようにするため。
     /// </param>
     public byte[] SendControl(
@@ -294,7 +294,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
         uint param = parameter ?? ResolveWakeParameter();
         var kind = (CartridgeKind)(byte)param;
 
-        // RetroFreakDumper.exe の逆コンパイルで判明した正式な初期化手順。
+        // 参照実装の逆コンパイルで判明した正式な初期化手順。
         // スロットごとに送るものが違う。
         byte[] ack = kind switch
         {
@@ -339,7 +339,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     {
         // 0x2F だけを送る。**実機で動作実績があるのはこの手順**。
         //
-        // RetroFreakDumper の正規手順は 0x04(1) → 0x2F(1) → 0x05 ×2 だが、
+        // 参照実装の正規手順は 0x04(1) → 0x2F(1) → 0x05 ×2 だが、
         // それに合わせたところカービィ3 を認識しなくなった（2026-09-23 実機）。
         // 本家は初期化後に SnesRead(0xC000, 0x4000) で 16KB を捨て読みし、
         // ヘッダ判定に失敗したら最大 5 回やり直す作りになっており、
@@ -357,7 +357,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// <summary>
     /// SFC・GBA 以外のスロットを有効にする。
     ///
-    /// **0x2F を使うのは SFC だけ。**参照実装 (RetroFreakDumper) の
+    /// **0x2F を使うのは SFC だけ。**参照実装の
     /// 各 Dumper.Initialize を見ると、GB / メガドライブ / ファミコン /
     /// PC エンジン / マークIII は揃って 0x04(1) → 0x05 → 200ms 待ち、で、
     /// 0x2F は送っていない。
@@ -811,7 +811,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// <summary>
     /// ポートを開き直し、スロットを選び直す。セーブの読み書きの前に送る。
     ///
-    /// 参照実装 (RetroFreakDumper) は、セーブの読み書きのたびに
+    /// 参照実装は、セーブの読み書きのたびに
     /// **シリアルポートそのものを開き直している**。
     ///
     ///   Initialize()   : Open() → 0x04(0) → 0x05 → 200ms 待ち
