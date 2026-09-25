@@ -105,6 +105,32 @@ public sealed class ProbeSafetyTests : IDisposable
         Assert.Equal(["あ", "", "い"], echoed);
     }
 
+    /// <summary>
+    /// **ファイルを作らない記録では、1 バイトも書き出さないこと。**
+    ///
+    /// 断りなく EXE の横へログのテキストファイルを置かないための経路。
+    /// 中身は画面のログ（echo 先）とメモリにだけ残る。
+    /// </summary>
+    [Fact]
+    public void メモリだけの記録はファイルを作らない()
+    {
+        var before = Directory.GetFiles(_dir);
+        var echoed = new List<string>();
+
+        using (var journal = ProbeJournal.InMemory(echoed.Add))
+        {
+            journal.Write("0x10 を送ります");
+            journal.Blank();
+            journal.Write("0x11 を送ります");
+
+            Assert.Null(journal.Path);
+            Assert.Contains("0x11 を送ります", journal.Text);
+        }
+
+        Assert.Equal(before, Directory.GetFiles(_dir));
+        Assert.Equal(["0x10 を送ります", "", "0x11 を送ります"], echoed);
+    }
+
     [Fact]
     public void 危険opcodeは記録され次回の探索から外れる()
     {

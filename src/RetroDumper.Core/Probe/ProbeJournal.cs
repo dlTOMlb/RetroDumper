@@ -15,12 +15,13 @@ namespace RetroDumper.Core.Probe;
 /// </summary>
 public sealed class ProbeJournal : IDisposable
 {
-    private readonly StreamWriter _writer;
+    private readonly StreamWriter? _writer;
     private readonly StringBuilder _buffer = new();
     private readonly Action<string>? _echo;
     private bool _disposed;
 
-    public string Path { get; }
+    /// <summary>書き出し先。ファイルを作らない記録では <c>null</c>。</summary>
+    public string? Path { get; }
 
     /// <summary>これまでに書いた内容。UI のダイアログ表示などに使う。</summary>
     public string Text => _buffer.ToString();
@@ -64,8 +65,8 @@ public sealed class ProbeJournal : IDisposable
 
         try
         {
-            _writer.WriteLine(line);
-            _writer.Flush();
+            _writer?.WriteLine(line);
+            _writer?.Flush();
         }
         catch (IOException)
         {
@@ -80,26 +81,28 @@ public sealed class ProbeJournal : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        try { _writer.Flush(); _writer.Dispose(); }
+        try { _writer?.Flush(); _writer?.Dispose(); }
         catch (IOException) { }
     }
 
-    /// <summary>dist フォルダ（exe と同じ場所）に日時付きの名前で作る。</summary>
-    public static ProbeJournal CreateNextTo(string prefix, Action<string>? echo = null)
+    /// <summary>
+    /// ファイルを作らず、記録をメモリと echo にだけ残す。
+    ///
+    /// **ディスクに書かないぶん、プロセスごと落ちたら記録も消える。**
+    /// 1 行ずつ flush していたのは、探索中にアダプタが USB から消えても
+    /// そこまでを残すためだった。例外で止まる分には echo 先（画面のログ）に
+    /// 出ているので追えるが、固まって強制終了した場合は何も残らない。
+    /// </summary>
+    public static ProbeJournal InMemory(Action<string>? echo = null) => new(echo);
+
+    private ProbeJournal(Action<string>? echo)
     {
-        return new ProbeJournal(
-            System.IO.Path.Combine(ExeDirectory, $"{prefix}-{DateTime.Now:yyyyMMdd-HHmmss}.txt"),
-            echo);
+        Path = null;
+        _echo = echo;
+        _writer = null;
     }
 
-    /// <summary>
-    /// dist フォルダの固定名ファイルに書き足す。
-    /// カートリッジを差し替えて繰り返す測定を 1 つのファイルに集める。
-    /// </summary>
-    public static ProbeJournal AppendNextTo(string name, Action<string>? echo = null)
-        => new(System.IO.Path.Combine(ExeDirectory, $"{name}.txt"), echo, append: true);
-
-    private static string ExeDirectory =>
-        System.IO.Path.GetDirectoryName(Environment.ProcessPath)
-        ?? Directory.GetCurrentDirectory();
+    // exe と同じ場所へ日時付きの記録を作る CreateNextTo / AppendNextTo は外した。
+    // 断りなくログのテキストファイルを置かないため。
+    // 保存先を決めて残したいときは、パスを渡す方のコンストラクタを使う。
 }
