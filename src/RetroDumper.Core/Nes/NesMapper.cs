@@ -32,7 +32,7 @@ public abstract class NesMapper
     /// NROM のようにバンク切り替えを持たないものは特に重要で、
     /// 範囲を設けないと折り返しが見つからず容量を誤る。
     ///
-    /// 値は sanni/cartreader の mapsize テーブル（Cart_Reader/NES.ino）に合わせた。
+    /// 値は既存の吸い出し機がまとめた容量の表に合わせた。
     /// 同ツールも利用者がマッパーを選ぶ方式で、この範囲内から容量を選ばせている。
     /// </summary>
     public virtual (long Min, long Max) PrgSizeRange => (16 * 1024, 512 * 1024);

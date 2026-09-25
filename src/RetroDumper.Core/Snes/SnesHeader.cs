@@ -177,7 +177,7 @@ public sealed class SnesHeader
 
     /// <summary>
     /// ヘッダのサイズ欄が実容量と食い違うことが知られている構成。
-    /// 値は sanni/cartreader が実カセットから確定させたものと同じ。
+    /// 値は実カセットから確定したものと同じ。
     /// 該当しなければ null。
     /// </summary>
     public (long Size, string Reason)? KnownSizeOverride()

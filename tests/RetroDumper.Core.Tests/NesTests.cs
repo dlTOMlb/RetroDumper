@@ -290,7 +290,7 @@ public sealed class NesDumpTests
 /// <summary>
 /// マッパーごとの容量範囲。
 ///
-/// 値は sanni/cartreader の mapsize テーブル（Cart_Reader/NES.ino）に合わせてある。
+/// 値は既存の吸い出し機がまとめた容量の表に合わせてある。
 /// 同ツールもマッパーは利用者が選ぶ方式で、容量はこの範囲から選ばせている。
 /// 範囲を間違えると、実測の折り返し検出があり得ない値を返したときに
 /// そのまま採用してしまう。
@@ -303,7 +303,7 @@ public sealed class NesMapperSizeRangeTests
     [InlineData(2, 64, 256)]     // UxROM
     [InlineData(3, 16, 32)]      // CNROM
     [InlineData(4, 32, 512)]     // MMC3
-    public void PRGの範囲がcartreaderの表と一致する(int mapper, int minKb, int maxKb)
+    public void PRGの範囲が既存の表と一致する(int mapper, int minKb, int maxKb)
     {
         var (min, max) = NesMapper.ForNumber(mapper)!.PrgSizeRange;
 
@@ -317,7 +317,7 @@ public sealed class NesMapperSizeRangeTests
     [InlineData(2, 0, 0)]        // UxROM  必ず CHR-RAM
     [InlineData(3, 0, 2048)]     // CNROM
     [InlineData(4, 0, 256)]      // MMC3
-    public void CHRの範囲がcartreaderの表と一致する(int mapper, int minKb, int maxKb)
+    public void CHRの範囲が既存の表と一致する(int mapper, int minKb, int maxKb)
     {
         var (min, max) = NesMapper.ForNumber(mapper)!.ChrSizeRange;
 

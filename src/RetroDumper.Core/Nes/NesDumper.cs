@@ -231,7 +231,7 @@ public sealed partial class NesDumper : ICartridgeDumper
     /// <summary>
     /// 実測値をマッパーが取りうる範囲に収める。
     ///
-    /// 範囲は sanni/cartreader の mapsize テーブルに合わせてある。
+    /// 範囲は既存の吸い出し機がまとめた容量の表に合わせてある。
     /// 折り返しの検出は ROM の内容次第で外すことがあるので、
     /// あり得ない値をそのまま採用しないための歯止め。
     /// </summary>

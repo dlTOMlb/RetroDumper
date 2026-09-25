@@ -21,7 +21,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
 {
     public const int BaudRate = 115200;
 
-    /// <summary>1 リクエストあたりの推奨転送サイズ。dumpfreak と同じ 1KB。</summary>
+    /// <summary>1 リクエストあたりの推奨転送サイズ。解析で観測された値と同じ 1KB。</summary>
     public const int DefaultChunkSize = 1024;
 
     private static readonly byte[] StatusRequest =
@@ -209,8 +209,8 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// <summary>
     /// 応答が返るまで状態要求を数回試す。
     ///
-    /// 接続直後の 1 回目は取りこぼすことがある。dumpfreak はメニューを
-    /// 描き直すたびに状態要求を出しているので、事実上リトライしていた。
+    /// 接続直後の 1 回目は取りこぼすことがある。解析元は画面を
+    /// 描き直すたびに状態要求を出しており、事実上リトライしていた。
     /// </summary>
     public RfcaStatus GetStatusWithRetry(int attempts = 3)
     {
@@ -238,7 +238,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// データ本体を伴わない制御コマンドを送る。
     ///
     /// リクエストの 5 つ目のフィールド（リード／ライトでは size の再掲）に
-    /// <paramref name="parameter"/> を入れる。dumpfreak の 0x2F コマンドが
+    /// <paramref name="parameter"/> を入れる。0x2F コマンドが
     /// この形で、size=0 / addr=0 / param=1 を送っている。
     /// </summary>
     /// <param name="headerField">
@@ -283,7 +283,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     }
 
     /// <summary>
-    /// スロットをウェイクアップさせる。dumpfreak の 2F コマンドと同じ手順
+    /// スロットをウェイクアップさせる。解析で判明した 2F コマンドと同じ手順
     /// （送信後 0.5 秒待つ）。
     ///
     /// これを送るまでカートリッジはデータバスを駆動せず、
@@ -505,7 +505,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// <summary>
     /// ウェイクアップコマンドに渡す値を固定する。null なら自動。
     ///
-    /// dumpfreak は SFC で 1 を送っていた。SFC の種別コードも 0x01 なので、
+    /// 解析では SFC で 1 を送っていた。SFC の種別コードも 0x01 なので、
     /// この値が「有効化フラグ」なのか「スロット番号」なのかは区別がついていない。
     /// 自動のときは種別コードを使い、それで読めなければ 1 を試す。
     /// </summary>
@@ -989,7 +989,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
             SendRequest(opcode, address, (uint)data.Length, headerField);
 
             // ライト要求 ACK。実機は 8 バイトのゼロを返すが、
-            // 異なる応答でも処理を続行する（dumpfreak と同じ挙動）。
+            // 異なる応答でも処理を続行する（解析で観測された挙動と同じ）。
             // 待ち時間は参照実装の ReadTimeout に合わせる。
             Span<byte> ack = stackalloc byte[8];
             int got = TryReadExact(ack, AckWait);
@@ -1055,7 +1055,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// リード／ライト要求の 20 バイトフレームを組んで送る。
     ///
     /// 2 つ目のフィールド (<paramref name="headerField"/>) の意味は不明。
-    /// dumpfreak の観測範囲ではリード・ライトとも常に 8 で、状態要求だけ 0 だった。
+    /// 観測された範囲ではリード・ライトとも常に 8 で、状態要求だけ 0 だった。
     /// 「これ以降のパラメータ長 - 4」と辻褄は合う。GBA のように
     /// 別のパラメータ構成を要求するコマンドがあるかもしれないので、
     /// 探索時に変えられるようにしてある。
