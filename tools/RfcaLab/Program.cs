@@ -40,6 +40,7 @@ internal static class Program
                 "wtrick" => WriteTrick(port, args),
                 "savetype" => SaveType(port),
                 "savetest" => SaveTest(port, args),
+                "erase" => Erase(port, args),
                 "flashid" => FlashId(port),
                 "dbinfo" => DatabaseInfo(),
                 "gbhead" => GbHeader(port),
@@ -64,6 +65,8 @@ internal static class Program
 
               survey [COM3]                 挿さっているカセットの素性を手早く調べる（読むだけ）
               pcedump [COM3] [out.pce]      Hu カードを吸い出して No-Intro と照合（読むだけ）
+              erase [COM3] [--value FF|00] [--restore]
+                                            セーブを全面同じ値で消す（**書き込む**）
               savetype [COM3]               ROM を読んでセーブ装置の種類を調べる（読むだけ）
               savetest [COM3] [控えの保存先]  吸い出し→同じ内容を書き戻し→照合（**書き込む**）
               probe  [COM3]                 状態と EEPROM の読み出し安定性を見る（読むだけ）
@@ -353,6 +356,185 @@ internal static class Program
     /// ROM の中に残る目印（SRAM_V / FLASH1M_V など）から判定する。
     /// どの種類がまだ実機で確かめられていないかを調べるのに使う。
     /// </summary>
+    /// <summary>
+    /// セーブを全面同じ値で消す。GUI の「セーブを消去する」と同じ手順。
+    ///
+    /// 消す前に必ず控えを取る。--restore を付けると、消したあとで
+    /// 控えを書き戻して元に戻すところまで確かめる。
+    ///
+    /// **消す大きさは読み戻せた長さに合わせる。**
+    /// マークIII / ゲームギアは容量を申告しないため、
+    /// 上限を決め打つと載っていない領域へ折り返す。
+    /// </summary>
+    private static int Erase(string port, string[] args)
+    {
+        byte filler = 0xFF;
+
+        int at = Array.IndexOf(args, "--value");
+        if (at >= 0 && at + 1 < args.Length)
+            filler = Convert.ToByte(args[at + 1], 16);
+
+        bool restore = args.Contains("--restore");
+
+        CartridgeKind kind;
+
+        using (var peek = Open(port, require: null))
+            kind = peek.GetStatus().Kind;
+
+        using var link = Open(port, kind);
+
+        var options = new RetroDumper.Core.Dumping.DumpOptions();
+
+        // 機種ごとに、読み書きに必要なものを揃える。
+        Func<byte[]> read;
+        Action<byte[]> write;
+        string label;
+
+        switch (kind)
+        {
+            case CartridgeKind.GameBoy:
+            {
+                var dumper = new RetroDumper.Core.Gb.GbDumper();
+                var info = dumper.Identify(link, options);
+
+                if (info.GbCartridgeType is not byte cartType || info.SaveMemorySize <= 0)
+                {
+                    Console.WriteLine("セーブ用の外部 RAM がありません。");
+                    return 3;
+                }
+
+                label = $"{info.Title} / {info.Mapper} / {info.SaveMemorySize} バイト";
+                read = () => GbSave.Read(link, cartType, info.SaveMemorySize);
+                write = data => GbSave.Write(link, cartType, data);
+                break;
+            }
+
+            case CartridgeKind.GameBoyAdvance:
+            {
+                var dumper = new RetroDumper.Core.Gba.GbaDumper();
+                var info = dumper.Identify(link, options);
+
+                Console.WriteLine("ROM を読んでセーブ装置を判定します…");
+
+                var rom = dumper.Dump(link, info, options, null, CancellationToken.None).Rom;
+                var type = GbaSave.Detect(rom);
+
+                if (type == GbaSaveType.None)
+                {
+                    Console.WriteLine("セーブ装置の目印が見つかりませんでした。");
+                    return 3;
+                }
+
+                if (GbaSave.AlternateEeprom(type) is not null)
+                    type = GbaSave.ProbeEepromSize(link, type).Type;
+
+                label = $"{info.Title} / {GbaSave.DisplayName(type)}";
+                read = () => GbaSave.Read(link, type);
+                write = data => GbaSave.Write(link, type, data);
+                break;
+            }
+
+            case CartridgeKind.MarkIIIOrGameGear:
+            {
+                label = "マークIII / ゲームギア";
+                read = () => RetroDumper.Core.Sms.SmsSave.Read(link);
+                write = data => RetroDumper.Core.Sms.SmsSave.Write(link, data);
+                break;
+            }
+
+            default:
+                Console.WriteLine($"{kind.ToDisplayName()} の消去には対応していません。");
+                return 3;
+        }
+
+        Console.WriteLine(label);
+        Console.WriteLine("消す前に現在のセーブを吸い出します…");
+
+        var original = read();
+
+        string backupPath = $"erase-backup-{DateTime.Now:yyyyMMdd-HHmmss}.sav";
+        File.WriteAllBytes(backupPath, original);
+
+        Console.WriteLine($"  {original.Length} バイト。控えを {backupPath} に保存しました。");
+        Console.WriteLine($"  先頭 16 バイト: {Convert.ToHexString(original.AsSpan(0, 16))}");
+
+        // 2 回読んで一致するか。接触が怪しいまま書くと被害が大きい。
+        var again = read();
+        int jitter = 0;
+
+        for (int i = 0; i < Math.Min(original.Length, again.Length); i++)
+            if (original[i] != again[i]) jitter++;
+
+        Console.WriteLine($"  読み出しの安定: {(jitter == 0 ? "はい" : $"いいえ（{jitter} バイト違う）")}");
+
+        if (jitter != 0 || original.Length != again.Length)
+        {
+            Console.WriteLine("読み出しが安定しないため、消去は行いません。");
+            return 4;
+        }
+
+        Console.WriteLine($"0x{filler:X2} で {original.Length} バイトを消します…");
+
+        link.AllowSaveWrites = true;
+
+        var blank = new byte[original.Length];
+        Array.Fill(blank, filler);
+
+        try
+        {
+            write(blank);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  失敗: {ex.Message}");
+            Console.WriteLine($"  控えは {backupPath} にあります。");
+            return 5;
+        }
+
+        // 書き込み側も照合しているが、独立にもう一度読んで確かめる。
+        var after = read();
+        int wrong = 0;
+
+        for (int i = 0; i < after.Length; i++) if (after[i] != filler) wrong++;
+
+        Console.WriteLine($"  読み戻し: {after.Length} バイト、" +
+                          $"0x{filler:X2} でないもの {wrong} バイト");
+        Console.WriteLine($"  先頭 16 バイト: {Convert.ToHexString(after.AsSpan(0, 16))}");
+
+        if (after.Length != original.Length || wrong != 0)
+        {
+            Console.WriteLine("消去しきれていません。");
+            return 6;
+        }
+
+        Console.WriteLine("消去できました。");
+
+        if (!restore) return 0;
+
+        Console.WriteLine("控えを書き戻します…");
+
+        try
+        {
+            write(original);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  書き戻しに失敗: {ex.Message}");
+            Console.WriteLine($"  控えは {backupPath} にあります。");
+            return 7;
+        }
+
+        var restored = read();
+        int differs = 0;
+
+        for (int i = 0; i < Math.Min(original.Length, restored.Length); i++)
+            if (original[i] != restored[i]) differs++;
+
+        Console.WriteLine($"  書き戻しの一致: {(differs == 0 ? "はい" : $"いいえ（{differs} バイト違う）")}");
+
+        return differs == 0 ? 0 : 8;
+    }
+
     private static int SaveType(string port)
     {
         using var link = Open(port);
