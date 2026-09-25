@@ -43,6 +43,10 @@ public static class MapperRegister
         // $6000-$7FFF はバッテリーバックアップ WRAM（セーブ）なので**含めない**。
         CartridgeKind.Famicom => address is >= 0x8000 and <= 0xFFFF,
 
+        // PC エンジンの SF2 ダッシュ。$1FF0-$1FF7 で上位バンクを差し替える。
+        // ROM しか無い普通の Hu カードでは、ここへ書いても何も変わらない。
+        CartridgeKind.PcEngineHuCard => address is >= 0x1FF0 and <= 0x1FF7,
+
         // GBA は読み出しに書き込みを必要としない。例外を作らない。
         CartridgeKind.GameBoyAdvance => false,
 

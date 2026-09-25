@@ -300,6 +300,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
         {
             CartridgeKind.GameBoyAdvance => InitGbaSlot(),
             CartridgeKind.SuperFamicom => InitSnesSlot(),
+            CartridgeKind.PcEngineHuCard => InitPceSlot(),
             _ => InitGenericSlot(param),
         };
 
@@ -366,6 +367,23 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// スロットが有効にならないままセーブを読んで全 0xFF になっていた
     /// （2026-09-24 ポケットモンスター ピカチュウで判明）。
     /// </summary>
+    /// <summary>
+    /// PC エンジンのスロットを有効にする。
+    ///
+    /// **ここだけ 0x04 を送らない。**参照実装は 0x05 だけを送り、
+    /// 0x04(1) は「VDC 5V」を選んだときにしか送らない。
+    /// 既定の手順に合わせる。
+    /// </summary>
+    private byte[] InitPceSlot()
+    {
+        Trace?.Invoke("PC エンジンのスロットを初期化します (0x05 のみ)");
+
+        var ack = SendSlotCommit();
+        Thread.Sleep(WakeSettleMilliseconds);
+
+        return ack;
+    }
+
     private byte[] InitGenericSlot(uint param)
     {
         Trace?.Invoke($"スロットを初期化します (0x04(1) → 0x05) [{(CartridgeKind)(byte)param}]");

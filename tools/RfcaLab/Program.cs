@@ -44,6 +44,7 @@ internal static class Program
                 "dbinfo" => DatabaseInfo(),
                 "gbhead" => GbHeader(port),
                 "survey" => Survey(port),
+                "pcedump" => PceDump(port, args),
                 "wflash" => WriteFlash(port, args),
                 _ => Usage(),
             };
@@ -62,6 +63,7 @@ internal static class Program
             使い方: rfcalab <コマンド> [ポート] [引数]
 
               survey [COM3]                 挿さっているカセットの素性を手早く調べる（読むだけ）
+              pcedump [COM3] [out.pce]      Hu カードを吸い出して No-Intro と照合（読むだけ）
               savetype [COM3]               ROM を読んでセーブ装置の種類を調べる（読むだけ）
               savetest [COM3] [控えの保存先]  吸い出し→同じ内容を書き戻し→照合（**書き込む**）
               probe  [COM3]                 状態と EEPROM の読み出し安定性を見る（読むだけ）
@@ -759,6 +761,19 @@ internal static class Program
             return 0;
         }
 
+        if (kind == CartridgeKind.PcEngineHuCard)
+        {
+            var pce = new RetroDumper.Core.Pce.PceDumper();
+            var card = pce.Identify(link, new RetroDumper.Core.Dumping.DumpOptions());
+
+            Console.WriteLine($"バンク配置: {card.Mapper}");
+            Console.WriteLine($"先頭 16 バイト: {Convert.ToHexString(card.RawHeader.AsSpan(0, 16))}");
+
+            foreach (string warning in card.Warnings) Console.WriteLine($"  注意: {warning}");
+
+            return 0;
+        }
+
         if (kind != CartridgeKind.GameBoyAdvance)
         {
             Console.WriteLine($"{kind.ToDisplayName()} は survey に未対応です。");
@@ -805,6 +820,54 @@ internal static class Program
 
         Console.WriteLine($"セーブ装置: {GbaSave.DisplayName(found)} ({GbaSave.SizeOf(found)} バイト)");
         return 0;
+    }
+
+    /// <summary>
+    /// Hu カードを吸い出してファイルに保存し、No-Intro と照合する。読むだけ。
+    /// Hu カードはタイトルを持たないので、名前は照合でしか分からない。
+    /// </summary>
+    private static int PceDump(string port, string[] args)
+    {
+        string path = args.Length > 2 ? args[2] : "hucard.pce";
+
+        using var link = Open(port, CartridgeKind.PcEngineHuCard);
+
+        var dumper = new RetroDumper.Core.Pce.PceDumper();
+        var options = new RetroDumper.Core.Dumping.DumpOptions();
+        var info = dumper.Identify(link, options);
+
+        Console.WriteLine($"バンク配置: {info.Mapper}");
+        Console.WriteLine($"先頭 16 バイト: {Convert.ToHexString(info.RawHeader.AsSpan(0, 16))}");
+        Console.WriteLine("吸い出しています…");
+
+        var progress = new Progress<RetroDumper.Core.Dumping.DumpProgress>(p =>
+        {
+            if (p.BytesDone % (128 * 1024) == 0)
+                Console.WriteLine($"  {p.BytesDone / 1024} KB");
+        });
+
+        var result = dumper.Dump(link, info, options, progress, CancellationToken.None);
+
+        File.WriteAllBytes(path, result.Rom);
+
+        Console.WriteLine($"{result.Rom.Length / 1024} KB を {path} に保存しました。");
+        Console.WriteLine($"CRC32: {result.Crc32:X8}");
+
+        var db = RetroDumper.Core.Database.NoIntroDatabase.Load(log: null);
+        var hit = db.Match(result.Rom, result.Rom.Length);
+
+        Console.WriteLine($"No-Intro の名前: {hit?.GameName ?? "（一致なし）"}");
+
+        if (hit is null)
+        {
+            int sameSize = db.CountWithSize(result.Rom.Length);
+
+            Console.WriteLine(sameSize == 0
+                ? $"  この容量 ({result.Rom.Length} バイト) のソフトは DAT に 1 本も無い。容量の判定が違う。"
+                : $"  この容量のソフトは DAT に {sameSize} 本ある。中身が違う。");
+        }
+
+        return hit is null ? 3 : 0;
     }
 
     private static bool AllSame(byte[] data)

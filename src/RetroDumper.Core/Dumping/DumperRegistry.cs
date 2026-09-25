@@ -2,6 +2,7 @@ using RetroDumper.Core.Gb;
 using RetroDumper.Core.Gba;
 using RetroDumper.Core.Md;
 using RetroDumper.Core.Nes;
+using RetroDumper.Core.Pce;
 using RetroDumper.Core.Snes;
 using RetroDumper.Core.Sms;
 using RetroDumper.Core.Transport;
@@ -19,6 +20,7 @@ public static class DumperRegistry
         new SmsDumper(),
         new GbDumper(),
         new GbaDumper(),
+        new PceDumper(),
     ];
 
     /// <summary>
