@@ -40,6 +40,7 @@ internal static class Program
                 "wtrick" => WriteTrick(port, args),
                 "savetype" => SaveType(port),
                 "savetest" => SaveTest(port, args),
+                "sram" => Sram(port, args),
                 "erase" => Erase(port, args),
                 "flashid" => FlashId(port),
                 "dbinfo" => DatabaseInfo(),
@@ -593,6 +594,9 @@ internal static class Program
         if (kind == CartridgeKind.GameBoy)
             return GbSaveTest(port, backupPath, args);
 
+        if (kind == CartridgeKind.SuperFamicom)
+            return SnesSaveTest(port, backupPath, args);
+
         using var link = Open(port);
 
         var dumper = new RetroDumper.Core.Gba.GbaDumper();
@@ -956,6 +960,22 @@ internal static class Program
             return 0;
         }
 
+        if (kind == CartridgeKind.SuperFamicom)
+        {
+            var snes = new RetroDumper.Core.Snes.SnesDumper();
+            var info = snes.Identify(link, new RetroDumper.Core.Dumping.DumpOptions());
+
+            Console.WriteLine($"タイトル: {info.Title}");
+            Console.WriteLine($"マッパー: {info.Mapper}（{info.SnesMapping}）");
+            Console.WriteLine($"ROM: {info.RomSize / 1024} KB");
+            Console.WriteLine($"セーブ RAM: {info.SaveMemorySize} バイト");
+
+            if (info.SnesMapping is RetroDumper.Core.Snes.SnesMapper m)
+                DescribeSramWindow(m);
+
+            return 0;
+        }
+
         if (kind != CartridgeKind.GameBoyAdvance)
         {
             Console.WriteLine($"{kind.ToDisplayName()} は survey に未対応です。");
@@ -1050,6 +1070,178 @@ internal static class Program
         }
 
         return hit is null ? 3 : 0;
+    }
+
+    /// <summary>
+    /// セーブ RAM の窓がどこに開くかを書き出す。
+    ///
+    /// 6 経路あり、LoROM だけが読みと書きで違うバンクを使う。
+    /// そこを間違えると「読み出しは正常なのに書き込みが別の場所へ行く」
+    /// という、最も気付きにくい壊れ方をする。
+    /// </summary>
+    private static void DescribeSramWindow(RetroDumper.Core.Snes.SnesMapper mapper)
+    {
+        var layout = RetroDumper.Core.Snes.SnesAddressMap.SramLayout(mapper);
+
+        if (layout is null)
+        {
+            Console.WriteLine("  セーブ RAM の窓が定義されていません。");
+            return;
+        }
+
+        var w = layout.Value;
+
+        Console.WriteLine($"  読みバンク: ${w.ReadBank:X2} / 書きバンク: ${w.WriteBank:X2}" +
+                          (w.ReadBank != w.WriteBank ? "  ← 読みと書きで違う" : ""));
+        Console.WriteLine($"  窓: ${w.OffsetInBank:X4} から {w.BytesPerBank} バイト" +
+                          $" / 上限 {w.MaxSize} バイト");
+        Console.WriteLine($"  opcode: {(w.UseExOpcode ? "拡張" : "通常")}");
+    }
+
+    /// <summary>
+    /// SFC のセーブを吸い出し、同じ内容を書き戻して照合する。
+    ///
+    /// --readonly なら吸い出しと安定の確認だけで終わる。
+    /// 6 経路すべて実機未確認なので、まず読めることを確かめてから書く。
+    /// </summary>
+    private static int SnesSaveTest(string port, string backupPath, string[] args)
+    {
+        using var link = Open(port, CartridgeKind.SuperFamicom);
+
+        var dumper = new RetroDumper.Core.Snes.SnesDumper();
+        var options = new RetroDumper.Core.Dumping.DumpOptions();
+        var info = dumper.Identify(link, options);
+
+        Console.WriteLine($"タイトル: {info.Title}");
+        Console.WriteLine($"マッパー: {info.Mapper}（{info.SnesMapping}）");
+        Console.WriteLine($"ROM: {info.RomSize / 1024} KB");
+        Console.WriteLine($"セーブ RAM: {info.SaveMemorySize} バイト");
+
+        if (info.SnesMapping is not RetroDumper.Core.Snes.SnesMapper mapper)
+        {
+            Console.WriteLine("マッパーが分かりません。");
+            return 3;
+        }
+
+        DescribeSramWindow(mapper);
+
+        if (info.SaveMemorySize <= 0)
+        {
+            Console.WriteLine("このカートリッジにはセーブ RAM がありません。");
+            return 3;
+        }
+
+        Console.WriteLine("セーブを吸い出します…");
+
+        var original = RetroDumper.Core.Snes.SnesSave.Read(link, mapper, info.SaveMemorySize);
+
+        File.WriteAllBytes(backupPath, original);
+
+        Console.WriteLine($"  控えを {backupPath} に保存しました。");
+        Console.WriteLine($"  先頭 16 バイト: {Convert.ToHexString(original.AsSpan(0, Math.Min(16, original.Length)))}");
+
+        int ff = original.Count(b => b == 0xFF);
+        int zero = original.Count(b => b == 0x00);
+
+        Console.WriteLine($"  0xFF が {ff * 100 / original.Length}% / 0x00 が {zero * 100 / original.Length}%" +
+                          $" / 出現するバイト値 {original.Distinct().Count()} 種類");
+
+        if (ff == original.Length)
+            Console.WriteLine("  ！！ 全バイト 0xFF。窓が開いていないか、接触不良。");
+
+        // 2 回読んで一致するか。接触が怪しいまま書くと被害が大きい。
+        var again = RetroDumper.Core.Snes.SnesSave.Read(link, mapper, info.SaveMemorySize);
+        int jitter = 0;
+
+        for (int i = 0; i < original.Length; i++) if (original[i] != again[i]) jitter++;
+
+        Console.WriteLine($"  読み出しの安定: {(jitter == 0 ? "はい" : $"いいえ（{jitter} バイト違う）")}");
+
+        if (jitter != 0)
+        {
+            Console.WriteLine("読み出しが安定しないため、書き込みは行いません。");
+            return 4;
+        }
+
+        if (args.Contains("--readonly"))
+        {
+            Console.WriteLine("読み出しのみで終了します（書き込みません）。");
+            return 0;
+        }
+
+        Console.WriteLine("同じ内容を書き戻します…");
+
+        link.AllowSaveWrites = true;
+
+        try
+        {
+            RetroDumper.Core.Snes.SnesSave.Write(link, mapper, original);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  失敗: {ex.Message}");
+            Console.WriteLine($"  控えは {backupPath} にあります。");
+            return 5;
+        }
+
+        var readBack = RetroDumper.Core.Snes.SnesSave.Read(link, mapper, info.SaveMemorySize);
+        int differs = 0;
+
+        for (int i = 0; i < original.Length; i++) if (original[i] != readBack[i]) differs++;
+
+        Console.WriteLine(differs == 0
+            ? $"結果: 合格。{info.Mapper} のセーブ RAM の読み書きが通りました。"
+            : $"結果: 不合格。{differs} バイト違います。控えは {backupPath} にあります。");
+
+        return differs == 0 ? 0 : 6;
+    }
+
+    /// <summary>
+    /// SFC のセーブ RAM の窓を指定の大きさで読み、折り返しの周期を見る。読むだけ。
+    ///
+    /// 申告容量より大きく読めば、載っている分を超えたところで
+    /// 同じ内容が繰り返される。周期が申告容量と合っていれば、
+    /// 窓の位置が正しいと言える。合っていなければ、
+    /// SRAM ではない場所を読んでいる。
+    /// </summary>
+    private static int Sram(string port, string[] args)
+    {
+        int size = args.Length > 2 ? int.Parse(args[2]) : 0x8000;
+
+        using var link = Open(port, CartridgeKind.SuperFamicom);
+
+        var dumper = new RetroDumper.Core.Snes.SnesDumper();
+        var info = dumper.Identify(link, new RetroDumper.Core.Dumping.DumpOptions());
+
+        if (info.SnesMapping is not RetroDumper.Core.Snes.SnesMapper mapper)
+        {
+            Console.WriteLine("マッパーが分かりません。");
+            return 3;
+        }
+
+        Console.WriteLine($"タイトル: {info.Title} / {info.Mapper}");
+        Console.WriteLine($"ヘッダ申告のセーブ RAM: {info.SaveMemorySize} バイト");
+        Console.WriteLine($"{size} バイト読みます…");
+
+        var data = RetroDumper.Core.Snes.SnesSave.Read(link, mapper, size);
+
+        Console.WriteLine($"  出現するバイト値: {data.Distinct().Count()} 種類");
+
+        // 2 の冪の周期で折り返しているかを見る。
+        for (int period = 0x800; period < size; period <<= 1)
+        {
+            bool repeats = true;
+
+            for (int i = period; i < size && repeats; i++)
+                if (data[i] != data[i % period]) repeats = false;
+
+            Console.WriteLine($"  {period,6} バイトで折り返す: {(repeats ? "はい" : "いいえ")}");
+        }
+
+        for (int at = 0; at < size; at += 0x800)
+            Console.WriteLine($"  ${at:X4}: {Convert.ToHexString(data.AsSpan(at, 16))}");
+
+        return 0;
     }
 
     private static bool AllSame(byte[] data)

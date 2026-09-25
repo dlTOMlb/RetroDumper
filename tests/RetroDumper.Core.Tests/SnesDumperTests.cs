@@ -46,6 +46,58 @@ public class SnesDumperTests
     }
 
     /// <summary>
+    /// **セーブ RAM の容量は、吸い出しに含めるかとは無関係に申告すること。**
+    ///
+    /// SaveSize は「この吸い出しに ROM の後ろへ付けるか」で、既定はオフ。
+    /// SaveMemorySize はカートリッジに載っている容量そのもので、
+    /// セーブだけを読み書きする画面がこちらを見る。
+    ///
+    /// 両方を同じ値にしていたため、チェックを入れていない限り
+    /// SFC のセーブの吸い出しが「セーブ RAM がありません」で止まっていた。
+    /// 既定がオフなので、**既定のままでは一度も使えなかった。**
+    /// </summary>
+    [Theory]
+    [InlineData(SnesMapper.LoRom, 8 * 1024)]
+    [InlineData(SnesMapper.HiRom, 8 * 1024)]
+    [InlineData(SnesMapper.Sa1, 32 * 1024)]
+    public void 吸い出しに含めなくてもセーブ容量は申告する(SnesMapper mapper, long saveSize)
+    {
+        var rom = SnesRomBuilder.Build(mapper, 4 * Mb, saveSize: saveSize);
+        var cart = new FakeSnesCartridge(rom, mapper);
+
+        var info = new SnesDumper().Identify(cart, Options(o => o.IncludeSaveRam = false));
+
+        Assert.Equal(0, info.SaveSize);                    // 吸い出しには含めない
+        Assert.Equal(saveSize, info.SaveMemorySize);       // 載っている容量は申告する
+    }
+
+    [Theory]
+    [InlineData(SnesMapper.LoRom, 8 * 1024)]
+    [InlineData(SnesMapper.Sa1, 32 * 1024)]
+    public void 吸い出しに含めるときは両方入る(SnesMapper mapper, long saveSize)
+    {
+        var rom = SnesRomBuilder.Build(mapper, 4 * Mb, saveSize: saveSize);
+        var cart = new FakeSnesCartridge(rom, mapper);
+
+        var info = new SnesDumper().Identify(cart, Options(o => o.IncludeSaveRam = true));
+
+        Assert.Equal(saveSize, info.SaveSize);
+        Assert.Equal(saveSize, info.SaveMemorySize);
+    }
+
+    /// <summary>セーブが無いカセットは 0 のまま。</summary>
+    [Fact]
+    public void セーブが無ければ0のまま()
+    {
+        var rom = SnesRomBuilder.Build(SnesMapper.LoRom, 1 * Mb, saveSize: 0);
+        var cart = new FakeSnesCartridge(rom, SnesMapper.LoRom);
+
+        var info = new SnesDumper().Identify(cart, Options(o => o.IncludeSaveRam = true));
+
+        Assert.Equal(0, info.SaveMemorySize);
+    }
+
+    /// <summary>
     /// SA-1 のヘッダは $00:7FC0 では読めない。Super MMC がバンク $00 の
     /// $8000-$FFFF を ROM 先頭に貼るので、$00:FFC0 からしか読めない。
     /// </summary>

@@ -43,6 +43,12 @@ public sealed class SnesDumper : ICartridgeDumper
 
         long clamped = ClampToAddressableSize(mapper, romSize);
 
+        // **SaveSize と SaveMemorySize は別物。**
+        // SaveSize は「この吸い出しに含めるか」で、既定はオフ。
+        // SaveMemorySize はカートリッジに載っている容量そのもので、
+        // セーブだけを読み書きする画面がこちらを見る。
+        // 両方を同じ値にしていたため、チェックを入れない限り
+        // セーブの吸い出しが「セーブ RAM がありません」で止まっていた。
         long saveSize = options.IncludeSaveRam ? best.DeclaredRamSize : 0;
 
         var info = new CartridgeInfo
@@ -51,7 +57,7 @@ public sealed class SnesDumper : ICartridgeDumper
             Title = best.Title,
             RomSize = clamped,
             SaveSize = saveSize,
-            SaveMemorySize = saveSize,
+            SaveMemorySize = best.DeclaredRamSize,
             SnesMapping = best.Mapper,
             Mapper = DescribeMapper(mapper, best),
             RomExtension = ".sfc",

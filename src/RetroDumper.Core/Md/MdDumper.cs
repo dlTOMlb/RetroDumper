@@ -68,6 +68,12 @@ public sealed class MdDumper : ICartridgeDumper
             Title = title,
             RomSize = romSize,
             SaveSize = options.IncludeSaveRam ? saveSize : 0,
+
+            // 載っている容量は、吸い出しに含めるかとは無関係に申告する。
+            // これが 0 だと、セーブの読み書きの画面が「セーブ RAM が
+            // ありません」と言って止まる。
+            SaveMemorySize = saveSize,
+
             Mapper = "メガドライブ (リニア)",
             RomExtension = ".md",
             RawHeader = header,
