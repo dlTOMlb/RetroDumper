@@ -41,6 +41,9 @@ internal static class Program
                 "savetype" => SaveType(port),
                 "savetest" => SaveTest(port, args),
                 "sram" => Sram(port, args),
+                "wsram" => WriteSram(port, args),
+                "sramprobe" => SramProbe(port, args),
+                "sraminit" => SramInit(port, args),
                 "erase" => Erase(port, args),
                 "flashid" => FlashId(port),
                 "dbinfo" => DatabaseInfo(),
@@ -1242,6 +1245,244 @@ internal static class Program
             Console.WriteLine($"  ${at:X4}: {Convert.ToHexString(data.AsSpan(at, 16))}");
 
         return 0;
+    }
+
+    /// <summary>
+    /// SFC のセーブ RAM に目印のある模様を書き、読み戻して確かめ、元に戻す。
+    ///
+    /// **同じ内容を書き戻す試験では、窓の位置を確かめられない。**
+    /// 中身が一様（電池切れの SRAM など）だと、書けたのか
+    /// 何もしていないのか区別がつかない。位置で変わる模様を書く。
+    ///
+    /// LoROM は読み $70 / 書き $F0 と読み書きでバンクが違う唯一の経路で、
+    /// そこを間違えていれば「読めるのに書けない」または
+    /// 「別の場所を潰す」という形で必ず出る。
+    /// </summary>
+    private static int WriteSram(string port, string[] args)
+    {
+        using var link = Open(port, CartridgeKind.SuperFamicom);
+
+        var dumper = new RetroDumper.Core.Snes.SnesDumper();
+        var info = dumper.Identify(link, new RetroDumper.Core.Dumping.DumpOptions());
+
+        if (info.SnesMapping is not RetroDumper.Core.Snes.SnesMapper mapper)
+        {
+            Console.WriteLine("マッパーが分かりません。");
+            return 3;
+        }
+
+        int size = (int)info.SaveMemorySize;
+
+        if (size <= 0)
+        {
+            Console.WriteLine("セーブ RAM がありません。");
+            return 3;
+        }
+
+        Console.WriteLine($"タイトル: {info.Title} / {info.Mapper} / セーブ RAM {size} バイト");
+
+        var original = RetroDumper.Core.Snes.SnesSave.Read(link, mapper, size);
+
+        string backupPath = $"sram-backup-{DateTime.Now:yyyyMMdd-HHmmss}.sav";
+        File.WriteAllBytes(backupPath, original);
+
+        Console.WriteLine($"  元の内容を {backupPath} に控えました" +
+                          $"（出現するバイト値 {original.Distinct().Count()} 種類）。");
+
+        // 位置で変わる模様。**256 バイト周期にしないこと。**
+        // i * 31 だけだと 256 バイトごとに同じ並びが出て、
+        // 窓がずれていても気付けない。
+        var pattern = new byte[size];
+
+        for (int i = 0; i < size; i++)
+            pattern[i] = (byte)(i * 31 + (i >> 8) * 7 + (i >> 13) * 61 + 1);
+
+        Console.WriteLine("目印のある模様を書きます…");
+
+        link.AllowSaveWrites = true;
+
+        try
+        {
+            RetroDumper.Core.Snes.SnesSave.Write(link, mapper, pattern);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  書き込みに失敗: {ex.Message}");
+            Console.WriteLine($"  控えは {backupPath} にあります。");
+            return 5;
+        }
+
+        var readBack = RetroDumper.Core.Snes.SnesSave.Read(link, mapper, size);
+
+        int differs = 0;
+        int firstAt = -1;
+
+        for (int i = 0; i < size; i++)
+            if (readBack[i] != pattern[i])
+            {
+                differs++;
+                if (firstAt < 0) firstAt = i;
+            }
+
+        Console.WriteLine($"  読み戻し: 違うところ {differs} バイト" +
+                          (firstAt >= 0
+                              ? $"、最初は ${firstAt:X4}（書 0x{pattern[firstAt]:X2} / 読 0x{readBack[firstAt]:X2}）"
+                              : ""));
+
+        if (differs == 0)
+            Console.WriteLine($"  → {info.Mapper} のセーブ RAM の窓が正しいことを確かめました。");
+
+        // 元に戻す。中身が無くても、来たときの状態にして返す。
+        Console.WriteLine("元の内容に戻します…");
+
+        try
+        {
+            RetroDumper.Core.Snes.SnesSave.Write(link, mapper, original);
+            Console.WriteLine("  戻しました。");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  戻せませんでした: {ex.Message}");
+            Console.WriteLine($"  控えは {backupPath} にあります。");
+            return 7;
+        }
+
+        return differs == 0 ? 0 : 6;
+    }
+
+    /// <summary>
+    /// SFC のセーブ RAM に **8 バイトだけ** 書いて、読み戻しを並べて見る。
+    ///
+    /// 8KB を書いて 1 バイト目が違う、では何も分からない。
+    /// 書く量を最小にし、書き先のバンクを変えて比べる。
+    /// LoROM は読み $70 / 書き $F0 とされているが、
+    /// アダプタが $F0 を解釈しない可能性もここで分かる。
+    /// </summary>
+    private static int SramProbe(string port, string[] args)
+    {
+        using var link = Open(port, CartridgeKind.SuperFamicom);
+
+        link.AllowSaveWrites = true;
+
+        byte[] mark = [0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34, 0x56, 0x78];
+
+        Console.WriteLine($"書く 8 バイト: {Convert.ToHexString(mark)}");
+        Console.WriteLine();
+
+        foreach (uint bank in new uint[] { 0xF0, 0x70 })
+        {
+            uint at = bank << 16;
+
+            Console.WriteLine($"=== 書き先 ${bank:X2}:0000 ===");
+
+            var before = link.Read(RfcaOpcode.SnesRead, 0x700000, 8);
+            Console.WriteLine($"  書く前 $70:0000 : {Convert.ToHexString(before)}");
+
+            try
+            {
+                link.WriteSaveMemory(
+                    CartridgeKind.SuperFamicom, RfcaOpcode.SnesWrite, at, mark);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  書き込みで例外: {ex.Message}");
+                continue;
+            }
+
+            var after70 = link.Read(RfcaOpcode.SnesRead, 0x700000, 8);
+            Console.WriteLine($"  書いた後 $70:0000 : {Convert.ToHexString(after70)}" +
+                              (after70.AsSpan().SequenceEqual(mark) ? "  ★一致" : ""));
+
+            // 読み直してみる。直後の読みが当てにならない可能性を見る。
+            var again = link.Read(RfcaOpcode.SnesRead, 0x700000, 8);
+            Console.WriteLine($"  もう一度 $70:0000 : {Convert.ToHexString(again)}" +
+                              (again.AsSpan().SequenceEqual(mark) ? "  ★一致" : ""));
+
+            if (bank != 0x70)
+            {
+                var atF0 = link.Read(RfcaOpcode.SnesRead, 0xF00000, 8);
+                Console.WriteLine($"  書いた後 $F0:0000 : {Convert.ToHexString(atF0)}" +
+                                  (atF0.AsSpan().SequenceEqual(mark) ? "  ★一致" : ""));
+            }
+
+            Console.WriteLine();
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// 参照実装と同じ初期化を踏んでから、セーブ RAM に 8 バイト書いて読み戻す。
+    ///
+    ///   0x04(1) → 0x2F(1) → 0x05 → 0x05 → $00:C000 を 16KB 捨て読み
+    ///
+    /// 今の実装は 0x2F(1) だけで、0x04 と捨て読みを省いている。
+    /// ROM は読めるが、セーブ RAM はバスが浮いたまま（読みが常に
+    /// 直前にバスへ流れた最後の 1 バイト）になる。
+    /// **0x04(1) がカートリッジ RAM を有効にしているのではないか**を確かめる。
+    /// </summary>
+    private static int SramInit(string port, string[] args)
+    {
+        using var link = Open(port, CartridgeKind.SuperFamicom);
+
+        link.AllowSaveWrites = true;
+
+        Console.WriteLine("=== 今の手順（0x2F だけ）===");
+        ShowSramBus(link);
+
+        Console.WriteLine();
+        Console.WriteLine("=== 参照実装の手順を踏む ===");
+
+        // 専用ヘルパを使う。0x04 は 16 バイト、0x05 は 12 バイトのフレームで、
+        // 生の SendControl では往復が噛み合わない。
+        link.SendSlotSelect(1);
+        Console.WriteLine("  0x04(1) 送信");
+
+        link.SendControl(RfcaOpcode.SlotWakeup, parameter: 1);
+        Console.WriteLine("  0x2F(1) 送信");
+
+        link.SendSlotCommit();
+        link.SendSlotCommit();
+        Console.WriteLine("  0x05 を 2 回送信");
+
+        var discard = link.Read(RfcaOpcode.SnesRead, 0x00C000, 0x4000);
+        Console.WriteLine($"  $00:C000 を 16384 バイト捨て読み" +
+                          $"（出現するバイト値 {discard.Distinct().Count()} 種類、" +
+                          $"先頭 {Convert.ToHexString(discard.AsSpan(0, 8))}）");
+
+        Console.WriteLine();
+        ShowSramBus(link);
+
+        return 0;
+    }
+
+    /// <summary>セーブ RAM の窓へ 8 バイト書いて読み戻し、バスが生きているかを見る。</summary>
+    private static void ShowSramBus(RfcaLink link)
+    {
+        byte[] mark = [0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34, 0x56, 0x78];
+
+        var before = link.Read(RfcaOpcode.SnesRead, 0x700000, 8);
+        Console.WriteLine($"  書く前 $70:0000 : {Convert.ToHexString(before)}");
+
+        try
+        {
+            link.WriteSaveMemory(
+                CartridgeKind.SuperFamicom, RfcaOpcode.SnesWrite, 0xF00000, mark);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  書き込みで例外: {ex.Message}");
+            return;
+        }
+
+        var after = link.Read(RfcaOpcode.SnesRead, 0x700000, 8);
+
+        Console.WriteLine($"  書いた後 $70:0000 : {Convert.ToHexString(after)}");
+        Console.WriteLine(after.AsSpan().SequenceEqual(mark)
+            ? "  ★ 書いた 8 バイトがそのまま読めました。SRAM が生きています。"
+            : AllSame(after)
+                ? $"  → 全部 0x{after[0]:X2} の 1 種類。バスが浮いています。"
+                : "  → 一致しないが一様でもない。別の何かを読んでいます。");
     }
 
     private static bool AllSame(byte[] data)

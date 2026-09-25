@@ -111,7 +111,7 @@
                             <GroupBox Header="セーブデータ">
                                 <StackPanel>
                                     <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,0,0,4"
-                                               Text="GBA・スーパーファミコン・ゲームボーイのセーブを読み書きします。GBA だけはセーブ装置の種類をヘッダで申告しないため、ROM の中に残る目印（SRAM_V / FLASH1M_V など）から判定します。他の機種はヘッダから分かるので、下の指定は使いません。" />
+                                               Text="ゲームボーイ・ゲームボーイカラー・ゲームボーイアドバンスのセーブを読み書きします。実機で確かめられたのがこの 3 機種のためです。GBA だけはセーブ装置の種類をヘッダで申告しないため、ROM の中に残る目印（SRAM_V / FLASH1M_V など）から判定します。GB・GBC はヘッダから分かるので、下の指定は使いません。" />
                                     <Label Content="GBA のセーブ装置" />
                                     <ComboBox x:Name="GbaSaveTypeCombo" />
                                     <Button x:Name="GbaSaveReadButton" Content="セーブを吸い出す" Click="GbaSaveRead_Click"
@@ -161,8 +161,8 @@
 
                             <GroupBox Header="動作">
                                 <StackPanel>
-                                    <CheckBox x:Name="IncludeSaveCheck" Content="セーブ RAM も吸い出す（未検証）"
-                                              ToolTip="セーブ領域の配置は機種・マッパーごとに差が大きく、まだ実機検証ができていません。当面はオフのままを推奨します。" />
+                                    <CheckBox x:Name="IncludeSaveCheck" Content="セーブ RAM も吸い出す"
+                                              ToolTip="吸い出した ROM の後ろにセーブを付けます。実機で確かめられたゲームボーイ・ゲームボーイカラー・ゲームボーイアドバンスでのみ働きます。" />
                                     <TextBlock TextWrapping="Wrap" Foreground="#666" FontSize="11" Margin="0,2,0,0"
                                                Text="当面オフ推奨。ROM 本体の吸い出しには影響しません。" />
                                     <CheckBox x:Name="VerifyChecksumCheck" Content="チェックサムを検証する" IsChecked="True" />

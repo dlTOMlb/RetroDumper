@@ -658,7 +658,11 @@ public partial class MainWindow : Window
             RomSizeOverride = romSizeOverride,
             SnesMapperOverride = MapperChoices[Math.Max(0, SnesMapperCombo.SelectedIndex)].Value,
             ForceMmcInit = ForceMmcCheck.IsChecked == true,
-            IncludeSaveRam = IncludeSaveCheck.IsChecked == true,
+            // 確認できていない機種では、読んでも中身が当てにならない。
+            // ROM の後ろに付けると、それがセーブだと思われてしまう。
+            IncludeSaveRam = IncludeSaveCheck.IsChecked == true
+                             && _info is not null
+                             && SaveSupport.IsVerified(_info.Kind),
             VerifyChecksum = VerifyChecksumCheck.IsChecked == true,
             GbaRomBase = _gbaRomBase,
             NesMapperOverride = NesMapperChoices[Math.Max(0, NesMapperCombo.SelectedIndex)].Number,
@@ -935,8 +939,10 @@ public partial class MainWindow : Window
 
         if (_link is not null) _link.AllowSaveWrites = allow;
 
-        GbaSaveWriteButton.IsEnabled = allow && _link is not null;
-        SaveEraseButton.IsEnabled = allow && _link is not null;
+        bool saveOk = _link is not null && _info is not null && SaveSupport.IsVerified(_info.Kind);
+
+        GbaSaveWriteButton.IsEnabled = allow && saveOk;
+        SaveEraseButton.IsEnabled = allow && saveOk;
 
         Log(allow
             ? "セーブデータの書き込みを許可しました。ROM 領域には書き込めません。"
@@ -1036,6 +1042,16 @@ public partial class MainWindow : Window
         if (_info is null)
         {
             Log("先に「カセットを識別」を押してください。");
+            return null;
+        }
+
+        // **実機で確かめた機種だけを通す。**
+        // 未検証というだけでなく、SFC はセーブ RAM の窓でバスが浮いており
+        // 読み戻しの照合そのものが当てにならない。安全網が外れた状態で
+        // 「書けました」と言うより、出さないほうがよい。
+        if (!SaveSupport.IsVerified(_info.Kind))
+        {
+            Log(SaveSupport.ReasonNotVerified(_info.Kind));
             return null;
         }
 
@@ -1633,10 +1649,15 @@ public partial class MainWindow : Window
         SlotComparisonButton.IsEnabled = live;
         NesWriteProbeButton.IsEnabled = live;
         GbaHeadSampleButton.IsEnabled = live;
-        GbaSaveReadButton.IsEnabled = live;
-        GbaSaveWriteAllowCheck.IsEnabled = live;
-        GbaSaveWriteButton.IsEnabled = live && GbaSaveWriteAllowCheck.IsChecked == true;
-        SaveEraseButton.IsEnabled = live && GbaSaveWriteAllowCheck.IsChecked == true;
+        // 実機で確かめた機種以外では押せないようにする。
+        // 押してから「対応していません」と言われるより分かりやすい。
+        bool saveOk = live && _info is not null && SaveSupport.IsVerified(_info.Kind);
+
+        GbaSaveReadButton.IsEnabled = saveOk;
+        GbaSaveWriteAllowCheck.IsEnabled = saveOk;
+        GbaSaveWriteButton.IsEnabled = saveOk && GbaSaveWriteAllowCheck.IsChecked == true;
+        SaveEraseButton.IsEnabled = saveOk && GbaSaveWriteAllowCheck.IsChecked == true;
+        SaveEraseValueCombo.IsEnabled = saveOk;
         AutoDetectPortButton.IsEnabled = !busy && _link is null;
 
         Cursor = busy ? Cursors.Wait : null;
