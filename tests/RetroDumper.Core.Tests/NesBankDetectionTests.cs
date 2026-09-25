@@ -184,7 +184,7 @@ public sealed class Namcot108Tests
 /// 症状は「バンクが切り替わらない」としてだけ現れ、マッパーの選択を
 /// 疑う方向へ誘導される。実際 MMC1・UxROM・MMC3 が揃って落ちていた。
 ///
-/// 根拠は参照実装の NesScriptBase.CpuWrite。
+/// 根拠は参照実装のバス書き込み処理。
 /// NesCpuWrite の直後に必ず NesCpuRead(0x8000, 8) を送っている。
 /// </summary>
 public sealed class NesWritePokeTests

@@ -17,7 +17,7 @@ namespace RetroDumper.Core.Transport;
 ///   SFC・GB・ファミコンは ROM もセーブも同じ opcode で、番地だけが違う。
 ///   こちらは番地で判定するしかない。
 ///
-/// 番地と opcode は参照実装の各 SaveDataController に合わせた。
+/// 番地と opcode は参照実装の装置ごとの実装に合わせた。
 /// </summary>
 public static class SaveMemory
 {

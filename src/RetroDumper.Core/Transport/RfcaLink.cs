@@ -85,7 +85,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     public RfcaLink(string portName)
     {
         PortName = portName;
-        // 設定は参照実装 (MainForm) に合わせる。
+        // 設定は参照実装に合わせる。
         //
         // **バッファの大きさが効く。**既定の送信バッファは 2048 バイトしかなく、
         // フラッシュの 4096 バイト書き込みが収まらない。ドライバが吐き出すまで
@@ -311,7 +311,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// <summary>
     /// GBA スロットの初期化。
     ///
-    ///   Command04(0) → Command05() → 200ms 待つ
+    ///   0x04(param=0) → 0x05 → 200ms 待つ
     ///
     /// **0x2F は送らない。** GBA スロットには不要で、送っても拒否される。
     /// 以前これを「GBA が拒否するので別の手段があるはず」と誤解し、
@@ -331,7 +331,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// <summary>
     /// SFC スロットの初期化。
     ///
-    ///   Command04(1) → Command2F(1) → Command05() ×2
+    ///   0x04(param=1) → 0x2F(param=1) → 0x05 ×2
     ///
     /// 0x2F だけでも読めていたが、正式な手順はこちら。
     /// </summary>
@@ -358,7 +358,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// SFC・GBA 以外のスロットを有効にする。
     ///
     /// **0x2F を使うのは SFC だけ。**参照実装の
-    /// 各 Dumper.Initialize を見ると、GB / メガドライブ / ファミコン /
+    /// 各機種の初期化処理を見ると、GB / メガドライブ / ファミコン /
     /// PC エンジン / マークIII は揃って 0x04(1) → 0x05 → 200ms 待ち、で、
     /// 0x2F は送っていない。
     ///
@@ -815,7 +815,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// **シリアルポートそのものを開き直している**。
     ///
     ///   Initialize()   : Open() → 0x04(0) → 0x05 → 200ms 待ち
-    ///   DumpFinished() : 0x05 → Close()
+    ///   終了時 : 0x05 → ポートを閉じる
     ///
     /// Open() はポートを開いて受信バッファを捨てる。USB CDC の状態が
     /// ここで一度リセットされる。こちらは接続時に開いたまま使い続けていた。
@@ -1000,7 +1000,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
                 Trace?.Invoke($"WARN: ライト要求 ACK が非ゼロ {Convert.ToHexString(ack)}");
 
             // データ本体送信。送り終えてから、送信バッファが空になるのを待つ。
-            // 参照実装も Write の直後に必ず WaitWriteBytesZero を呼んでいる。
+            // 参照実装も送信の直後に必ず送信完了を待っている。
             _port.Write(data.ToArray(), 0, data.Length);
             WaitWriteDrained();
 
@@ -1084,7 +1084,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// <summary>
     /// 送信バッファが空になるのを待つ。
     ///
-    /// 参照実装は書き込みのたびにこれを行っている（WaitWriteBytesZero）。
+    /// 参照実装は書き込みのたびにこれを行っている。
     /// バッファに積んだだけで次へ進むと、アダプタがまだ受け取り切っていない
     /// うちに次のコマンドを送ることになる。
     /// </summary>

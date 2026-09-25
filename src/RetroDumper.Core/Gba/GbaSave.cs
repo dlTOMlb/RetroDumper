@@ -22,7 +22,7 @@ public enum GbaSaveType
 /// GBA のカートリッジはセーブ装置の種類をヘッダで申告しない。
 /// 代わりに、ROM の中に開発キットのライブラリが残した目印の文字列がある。
 /// "SRAM_V" や "FLASH1M_V" といった並びで、これを探して種類を決める。
-/// 手順は参照実装の SaveDataController 各実装に合わせた。
+/// 手順は参照実装の装置ごとの実装に合わせた。
 ///
 /// **書き込みはセーブ専用の opcode だけを使う。**
 /// GBA は ROM とセーブで opcode が別系統になっており、
@@ -538,10 +538,10 @@ public static class GbaSave
         GbaSaveType.Flash512k or GbaSaveType.Flash1M => 4096,
 
         // SRAM / FRAM は一括ではなく 8192 バイトずつ。
-        // 参照実装の Command.Write が、どの装置でも本体を 8192 で区切っている。
+        // 参照実装が、どの装置でも本体を 8192 で区切って送っている。
         _ => Math.Min(SizeOf(type), MaxPayload),
     };
 
-    /// <summary>1 コマンドで送る本体の上限。参照実装の Command.Write に合わせた。</summary>
+    /// <summary>1 コマンドで送る本体の上限。参照実装の区切り方に合わせた。</summary>
     private const int MaxPayload = 8192;
 }
