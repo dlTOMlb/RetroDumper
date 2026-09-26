@@ -160,15 +160,7 @@ Copyright (c) 2026 dlTOMlb
 このアプリはカートリッジへ書き込み、セーブを消すことができます。  
 使った結果について作者は責任を負いません。
 
-### 同梱しているデータベース
-
-`src/RetroDumper.Core/Database/Embedded/` の DAT は他の企画の成果物で、**MIT の対象外です**。  
-それぞれの条件に従います。
-
-| 出典 | 本数 |
-|---|---|
-| [No-Intro](https://no-intro.org/) | 2（GBA、ファミコン） |
-| [libretro-database](https://github.com/libretro/libretro-database) | 9 |
-
-Retro Freak の名称と製品は各権利者に帰属します。  
-本プロジェクトは公式のものではなく、関係もありません。
+**同梱している DAT は MIT の対象外です**。  
+他の企画の成果物で、それぞれの条件に従います。  
+Retro Freak の名称と製品も各権利者に帰属します。  
+くわしくは [NOTICE.md](NOTICE.md) を見てください。
