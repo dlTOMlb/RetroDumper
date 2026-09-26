@@ -16,8 +16,7 @@ dotnet build RetroDumper.sln -c Release
 dotnet run --project src/RetroDumper.App -c Release
 ```
 
-テスト（実機不要。  
-カートリッジのバスデコードをシミュレートして検証します）:
+テスト（実機不要。カートリッジのバスデコードをシミュレートして検証します）:
 
 ```bash
 dotnet test
