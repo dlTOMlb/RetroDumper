@@ -1,5 +1,7 @@
 # RetroDumper 開発者向け資料
 
+[![CI](https://github.com/dlTOMlb/RetroDumper/actions/workflows/ci.yml/badge.svg)](https://github.com/dlTOMlb/RetroDumper/actions/workflows/ci.yml)
+
 RFCA の通信プロトコルと、機種ごとの吸い出し方をまとめたものです。  
 使い方は [README.md](README.md) にあります。
 
@@ -21,6 +23,26 @@ dotnet run --project src/RetroDumper.App -c Release
 ```bash
 dotnet test
 ```
+
+### CI
+
+main への push と、main 宛の PR で [GitHub Actions](.github/workflows/ci.yml) が走ります。  
+WPF を含むため `windows-latest` でしかビルドできません。
+
+| 手順 | 内容 |
+|---|---|
+| ビルド | ソリューション全体。**`-warnaserror` 付き** |
+| テスト | 401 件 |
+| RfcaLab | ソリューションに入っていないので別に建てる |
+| 単一ファイルの発行 | 実際に publish し、**20MB 未満なら失敗させる** |
+
+**警告 0 を保っているので、増えたら落ちます**。
+
+最後の 1 つは、publish の引数を付け忘れて `dist` の単一ファイル EXE を 156KB の通常構成で上書きした事故があるためです。  
+指定は csproj へ移しましたが、効かなくなったときに気づけるようにしてあります。
+
+`main` は保護してあり、この検査を通らない PR は merge できません。  
+ただし管理者は直接 push できる設定のままです。
 
 ### 単体 EXE を作る
 
