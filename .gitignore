@@ -36,3 +36,4 @@ dangerous-opcodes.txt
 sfc-diagnostics-*.txt
 gba-*.txt
 wake-param-*.txt
+publish-check/

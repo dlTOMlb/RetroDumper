@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 同じブランチで新しい push があったら、走っている分は止める
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # WPF を含むため Windows でしかビルドできない
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: 復元
+        run: dotnet restore RetroDumper.sln
+
+      # 警告 0 を保っているので、増えたら落とす
+      - name: ビルド
+        run: dotnet build RetroDumper.sln -c Release --no-restore -warnaserror
+
+      - name: テスト
+        run: dotnet test RetroDumper.sln -c Release --no-build --logger "console;verbosity=normal"
+
+      # ソリューションに入っていないので別に建てる。
+      # 実機を叩く道具だが、壊れたまま気づかないのは困る。
+      - name: RfcaLab のビルド
+        run: dotnet build tools/RfcaLab -c Release -warnaserror
+
+      # 配布物が作れる状態かも見ておく。
+      # publish の指定は csproj にあるので引数は要らない。
+      - name: 単一ファイルの発行
+        run: dotnet publish src/RetroDumper.App -c Release -o publish-check
+
+      - name: 発行できたか確認
+        shell: pwsh
+        run: |
+          $exe = Get-Item publish-check/RetroDumper.exe
+          "{0:N0} バイト  {1}" -f $exe.Length, $exe.VersionInfo.ProductVersion
+          if ($exe.Length -lt 20MB) {
+            throw "単一ファイルになっていません。自己完結の指定が効いているか確認してください。"
+          }
