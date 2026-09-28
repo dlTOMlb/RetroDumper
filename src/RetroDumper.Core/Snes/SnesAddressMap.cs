@@ -18,6 +18,59 @@ public static class SnesAddressMap
     /// <summary>1MB ブロック。SA-1 / S-DD1 の Super MMC の単位。</summary>
     public const long MmcBlockSize = 0x100000;
 
+    // ------------------------------------------------------------------
+    // SPC7110
+    // ------------------------------------------------------------------
+
+    /// <summary>SPC7110 が 1 回に読む単位。32KB。</summary>
+    public const long Spc7110BankSize = 0x8000;
+
+    /// <summary>
+    /// SPC7110 で直接見えている範囲。バンク $C0 から 4MB。
+    /// ここを超える分は <see cref="Spc7110PageRegister"/> で貼り替える。
+    /// </summary>
+    public const long Spc7110DirectSize = 4 * MmcBlockSize;
+
+    /// <summary>貼り替えた 1MB が現れるバンク。</summary>
+    private const uint Spc7110WindowBank = 0xD0;
+
+    private const uint Spc7110DirectBank = 0xC0;
+
+    /// <summary>1MB の窓を選ぶレジスタ。</summary>
+    public const uint Spc7110PageRegister = 0x004831;
+
+    /// <summary>
+    /// SPC7110 の 32KB バンク <paramref name="bank"/> を読むバスアドレス。
+    ///
+    /// 先頭 128 バンク (4MB) はバンク $C0 以降にそのまま並んでいる。
+    /// それ以降は 32 バンク (1MB) ごとに <see cref="Spc7110PageRegister"/> で
+    /// 貼り替え、バンク $D0 から読む。
+    /// </summary>
+    public static uint Spc7110BusAddress(int bank)
+    {
+        if (bank < Spc7110DirectBanks)
+            return (uint)(Spc7110DirectBank * BankSize + bank * Spc7110BankSize);
+
+        int within = (bank - Spc7110DirectBanks) % Spc7110BanksPerPage;
+
+        return (uint)(Spc7110WindowBank * BankSize + within * Spc7110BankSize);
+    }
+
+    /// <summary>
+    /// そのバンクを読む前に <see cref="Spc7110PageRegister"/> へ書く値。
+    /// 直接見えている範囲では 0。
+    /// </summary>
+    public static byte Spc7110PageFor(int bank)
+        => bank < Spc7110DirectBanks
+            ? (byte)0
+            : (byte)(3 + (bank - Spc7110DirectBanks) / Spc7110BanksPerPage);
+
+    /// <summary>直接見えているバンク数。4MB ÷ 32KB = 128。</summary>
+    public const int Spc7110DirectBanks = (int)(Spc7110DirectSize / Spc7110BankSize);
+
+    /// <summary>1 枚の窓に入るバンク数。1MB ÷ 32KB = 32。</summary>
+    public const int Spc7110BanksPerPage = (int)(MmcBlockSize / Spc7110BankSize);
+
     /// <summary>マッパーごとに 1 リクエストで跨いではいけない境界。</summary>
     public static long ChunkAlignment(SnesMapper mapper) => mapper switch
     {

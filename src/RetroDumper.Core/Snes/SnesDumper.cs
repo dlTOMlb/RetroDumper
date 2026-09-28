@@ -92,10 +92,12 @@ public sealed class SnesDumper : ICartridgeDumper
                 $"{mapper} で 4MB を超えるため、MMC バンクレジスタへの書き込みが必須になります。" +
                 "書き込みが効かない場合は 4MB 以降が正しく読めません。");
 
-        if (mapper == SnesMapper.Spc7110)
+        if (mapper == SnesMapper.Spc7110 && romSize > Spc7110DirectSize)
             info.Warnings.Add(
-                "SPC7110 搭載カセットです。バンク $C0-$FF に直接見える 4MB のみ吸い出します。" +
-                "これを超える容量のものは別途マッピング処理が必要です。");
+                "SPC7110 で 4MB を超えるため、窓を貼り替えるレジスタへの書き込みが必須になります。" +
+                "書き込みが効かない場合は 4MB 以降が正しく読めません。" +
+                "**この経路は実機で確認できていません。**" +
+                "吸い出したら No-Intro と一致するか必ず確かめてください。");
 
         if (clamped != romSize)
             info.Warnings.Add(
@@ -121,7 +123,10 @@ public sealed class SnesDumper : ICartridgeDumper
         SnesMapper.LoRom => Math.Min(requested, 4 * 1024 * 1024),
 
         // バンク $C0-$FF の 64KB × 64 = 4MB。これを超えるものは ExHiROM。
-        SnesMapper.HiRom or SnesMapper.Spc7110 => Math.Min(requested, 4 * 1024 * 1024),
+        SnesMapper.HiRom => Math.Min(requested, 4 * 1024 * 1024),
+
+        // SPC7110 は 1MB の窓を貼り替えられるので 8MB まで。
+        SnesMapper.Spc7110 => Math.Min(requested, 8 * 1024 * 1024),
 
         // 前半 4MB がバンク $C0-$FF、後半がバンク $40-$7D。
         // $7E/$7F は WRAM なので後半は 62 バンク = 3.875MB まで。
@@ -144,6 +149,8 @@ public sealed class SnesDumper : ICartridgeDumper
 
         byte[] rom = mapper is SnesMapper.Sa1 or SnesMapper.Sdd1
             ? DumpViaMmc(link, mapper, info.RomSize, options, progress, cancellationToken)
+            : mapper == SnesMapper.Spc7110
+            ? DumpViaSpc7110(link, info.RomSize, options, progress, cancellationToken)
             : BulkReader.Read(
                 link, RfcaOpcode.SnesRead, info.RomSize,
                 offset => SnesAddressMap.ToBusAddress(mapper, offset),
@@ -176,6 +183,114 @@ public sealed class SnesDumper : ICartridgeDumper
             ChecksumDetail = detail,
             Crc32 = Checksums.Crc32(rom),
         };
+    }
+
+    // ------------------------------------------------------------------
+    // SPC7110
+    // ------------------------------------------------------------------
+
+    /// <summary>4MB。ここまでは貼り替えずに読める。</summary>
+    private const long Spc7110DirectSize = SnesAddressMap.Spc7110DirectSize;
+
+    /// <summary>
+    /// SPC7110 経由の吸い出し。32KB ずつ、必要に応じて窓を貼り替えながら読む。
+    ///
+    /// 先頭 4MB はバンク $C0 以降にそのまま並んでいるので貼り替えは要らない。
+    /// それを超える分（天外魔境ZERO の 5MB など）は、1MB ごとに
+    /// $4831 を書いてバンク $D0 に貼り、そこから読む。
+    ///
+    /// **この経路は実機で確認できていない。**手順は動作実績のある実装から
+    /// 写したもので、該当カセットが手元に無く試せていない。
+    /// </summary>
+    private static byte[] DumpViaSpc7110(
+        IRfcaLink link,
+        long romSize,
+        DumpOptions options,
+        IProgress<DumpProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        bool needsPaging = romSize > Spc7110DirectSize;
+
+        // 4MB で収まるカセットには一切書き込まない。
+        // 書き込み保護を有効にしたままでも吸い出せる状態を保つ。
+        if (needsPaging || options.ForceMmcInit)
+            InitializeSpc7110(link);
+
+        var rom = new byte[romSize];
+        long done = 0;
+        byte page = 0;
+
+        for (int bank = 0; done < romSize; bank++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            byte wanted = SnesAddressMap.Spc7110PageFor(bank);
+
+            // 同じ窓が続く間は書き直さない。1MB ごとに 1 回で済む。
+            if (needsPaging && wanted != page)
+            {
+                link.WriteByte(RfcaOpcode.SnesWrite, SnesAddressMap.Spc7110PageRegister, wanted);
+                page = wanted;
+            }
+
+            long length = Math.Min(SnesAddressMap.Spc7110BankSize, romSize - done);
+            uint at = SnesAddressMap.Spc7110BusAddress(bank);
+            long captured = done;
+
+            byte[] part = BulkReader.Read(
+                link, RfcaOpcode.SnesRead, length,
+                offsetInBank => at + (uint)offsetInBank,
+                options, "ROM 読み出し (SPC7110)",
+                new WindowProgress(progress, captured, romSize),
+                cancellationToken,
+                maxChunkAlignment: (int)SnesAddressMap.Spc7110BankSize);
+
+            part.CopyTo(rom, done);
+            done += length;
+        }
+
+        // 貼り替えたままだと以後の読み出しがずれる。既定へ戻す。
+        if (needsPaging)
+            link.WriteByte(RfcaOpcode.SnesWrite, SnesAddressMap.Spc7110PageRegister, 0);
+
+        return rom;
+    }
+
+    /// <summary>
+    /// SPC7110 を吸い出せる状態にする。
+    ///
+    /// **この並びは動作実績のある実装から写したもの。**
+    /// 各レジスタの意味までは分かっていないため、順序も回数も変えない。
+    /// $4830 への 0x80 / 0x00 の叩きが何を起こしているかは不明。
+    /// </summary>
+    private static void InitializeSpc7110(IRfcaLink link)
+    {
+        void Write(uint address, byte value)
+            => link.WriteByte(RfcaOpcode.SnesWrite, address, value);
+
+        Write(0x004834, 0x02);
+
+        Write(0x004830, 0x80);
+        Write(0x004830, 0x00);
+        Write(0x004830, 0x80);
+
+        for (int i = 0; i < 6; i++)
+        {
+            Write(0x004830, 0x80);
+            Write(0x004830, 0x00);
+        }
+
+        Write(0x004830, 0x80);
+
+        for (int i = 0; i < 2; i++)
+        {
+            Write(0x004830, 0x80);
+            Write(0x004830, 0x00);
+        }
+
+        Write(0x004831, 0x00);
+        Write(0x004832, 0x01);
+        Write(0x004833, 0x02);
     }
 
     // ------------------------------------------------------------------
@@ -337,7 +452,8 @@ public sealed class SnesDumper : ICartridgeDumper
 
     private static SnesMapper ResolveMapperFrom(CartridgeInfo info)
     {
-        if (info.RawHeader.Length < 0x20)
+        // Parse はリセットベクタ ($3C) まで読む。0x20 で通すと配列外になる。
+        if (info.RawHeader.Length < 0x40)
             return SnesMapper.LoRom;
 
         // 識別時に確定したヘッダなので、位置による絞り込みはもう不要。
