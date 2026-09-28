@@ -169,7 +169,7 @@ public class WriteProtectionTests
 
     /// <summary>MMC の明示初期化は書き込みを伴うので、保護下では中止される。</summary>
     [Fact]
-    public void Sa1_ForcedMmcInit_IsBlockedUnderWriteProtection()
+    public void Sa1_ForcedMmcInit_PassesUnderWriteProtection()
     {
         var rom = SnesRomBuilder.Build(SnesMapper.Sa1, 4 * 1024 * 1024);
         var cart = new FakeSnesCartridge(rom, SnesMapper.Sa1) { AllowWrites = false };
@@ -178,9 +178,15 @@ public class WriteProtectionTests
         var options = new DumpOptions { ChunkSize = 1024, IncludeSaveRam = false, ForceMmcInit = true };
         var info = dumper.Identify(cart, options);
 
-        Assert.Throws<RfcaWriteBlockedException>(
-            () => dumper.Dump(cart, info, options, null, CancellationToken.None));
+        var result = dumper.Dump(cart, info, options, null, CancellationToken.None);
+
+        Assert.Equal(rom, result.Rom);
+
+        // 通ったのはバンクレジスタだけ。通常の書き込みは 1 件も出ていない。
+        Assert.NotEmpty(cart.BankRegisterWrites);
         Assert.Empty(cart.Writes);
+        Assert.All(cart.BankRegisterWrites,
+            w => Assert.InRange(w.Address, 0x002220u, 0x002223u));
     }
 
     /// <summary>リード要求をすべてライト ACK で返すアダプタのふるまい。</summary>

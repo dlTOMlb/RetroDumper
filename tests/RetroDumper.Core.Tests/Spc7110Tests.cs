@@ -1,5 +1,6 @@
 using RetroDumper.Core.Dumping;
 using RetroDumper.Core.Snes;
+using RetroDumper.Core.Transport;
 using Xunit;
 
 namespace RetroDumper.Core.Tests;
@@ -35,7 +36,7 @@ public sealed class Spc7110Tests
 
         var info = new CartridgeInfo
         {
-            Kind = RetroDumper.Core.Transport.CartridgeKind.SuperFamicom,
+            Kind = CartridgeKind.SuperFamicom,
             Title = "TEST",
             RomSize = rom.Length,
             Mapper = "SPC7110",
@@ -53,6 +54,68 @@ public sealed class Spc7110Tests
         };
 
         return new SnesDumper().Dump(cart, info, options, null, CancellationToken.None).Rom;
+    }
+
+    /// <summary>
+    /// **書き込み保護を有効にしたままでも 5MB を最後まで読めること。**
+    ///
+    /// 窓の貼り替えは GB の MBC と同じ揮発性のレジスタ操作で、
+    /// ROM もセーブも変わらない。以前はここを通していなかったため、
+    /// 天外魔境ZERO を吸い出すのに「書き込みを許可」を外させていた。
+    /// </summary>
+    [Fact]
+    public void 書き込み保護のままでも読める()
+    {
+        var rom = Rom(5 * 1024 * 1024);
+        var cart = new FakeSpc7110Cart(rom) { AllowWrites = false };
+
+        Assert.Equal(rom, Dump(rom, cart));
+    }
+
+    /// <summary>
+    /// **開けた穴はレジスタだけ**。セーブ RAM の窓は通さない。
+    ///
+    /// 穴を広げすぎていないことを、番地で直接縛る。
+    /// </summary>
+    [Theory]
+    [InlineData(0x002220u, true)]    // SA-1 MMC
+    [InlineData(0x002223u, true)]
+    [InlineData(0x004804u, true)]    // S-DD1 MMC
+    [InlineData(0x004807u, true)]
+    [InlineData(0x004830u, true)]    // SPC7110
+    [InlineData(0x004834u, true)]
+    [InlineData(0x00221Fu, false)]   // 境界のすぐ外
+    [InlineData(0x002224u, false)]
+    [InlineData(0x004835u, false)]
+    [InlineData(0x700000u, false)]   // LoROM のセーブ RAM
+    [InlineData(0xF00000u, false)]   // その書き込み側
+    [InlineData(0x306000u, false)]   // HiROM のセーブ RAM
+    [InlineData(0x400000u, false)]   // SA-1 の BW-RAM
+    [InlineData(0x000000u, false)]   // ROM 領域
+    public void 通すのはレジスタだけ(uint address, bool expected)
+        => Assert.Equal(expected,
+            MapperRegister.IsBankRegister(CartridgeKind.SuperFamicom, address));
+
+    /// <summary>
+    /// **レジスタとセーブ RAM が重ならないこと。**
+    ///
+    /// 片方だけ直すと、セーブの実体をレジスタと誤認して
+    /// 保護下で書けてしまう。両者を突き合わせて縛る。
+    /// </summary>
+    [Fact]
+    public void レジスタはセーブ領域と重ならない()
+    {
+        foreach (uint address in new uint[]
+                 {
+                     0x002220, 0x002221, 0x002222, 0x002223,
+                     0x004804, 0x004805, 0x004806, 0x004807,
+                     0x004830, 0x004831, 0x004832, 0x004833, 0x004834,
+                 })
+        {
+            Assert.True(MapperRegister.IsBankRegister(CartridgeKind.SuperFamicom, address));
+            Assert.False(SaveMemory.IsSnesSram(address),
+                $"0x{address:X6} がセーブ領域と重なっています");
+        }
     }
 
     /// <summary>4MB までは貼り替えずに読める。書き込みも起きない。</summary>

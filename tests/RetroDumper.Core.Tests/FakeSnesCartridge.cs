@@ -89,17 +89,24 @@ public sealed class FakeSnesCartridge : IRfcaLink
 
         Writes.Add((opcode, address, data.ToArray()));
 
-        // SA-1 Super MMC ($2220-$2223) / S-DD1 ($4804-$4807)
         for (int i = 0; i < data.Length; i++)
-        {
-            uint target = address + (uint)i;
-            uint low = target & 0xFFFF;
+            ApplyMmc(address + (uint)i, data[i]);
+    }
 
-            if (_mapper == SnesMapper.Sa1 && low is >= 0x2220 and <= 0x2223)
-                _mmc[low - 0x2220] = (byte)(data[i] & 0x07);
-            else if (_mapper == SnesMapper.Sdd1 && low is >= 0x4804 and <= 0x4807)
-                _mmc[low - 0x4804] = (byte)(data[i] & 0x07);
-        }
+    /// <summary>
+    /// SA-1 Super MMC ($2220-$2223) / S-DD1 ($4804-$4807) の貼り替えを反映する。
+    ///
+    /// **通常の書き込みとバンクレジスタ経由の両方から呼ぶ。**
+    /// 貼り替えは揮発性のレジスタ操作なので、書き込み保護下でも通る。
+    /// </summary>
+    private void ApplyMmc(uint address, byte value)
+    {
+        uint low = address & 0xFFFF;
+
+        if (_mapper == SnesMapper.Sa1 && low is >= 0x2220 and <= 0x2223)
+            _mmc[low - 0x2220] = (byte)(value & 0x07);
+        else if (_mapper == SnesMapper.Sdd1 && low is >= 0x4804 and <= 0x4807)
+            _mmc[low - 0x4804] = (byte)(value & 0x07);
     }
 
     public void WriteByte(uint opcode, uint address, byte value)
@@ -216,6 +223,7 @@ public sealed class FakeSnesCartridge : IRfcaLink
             throw new RfcaWriteBlockedException($"0x{address:X4} はバンクレジスタではありません");
 
         BankRegisterWrites.Add((kind, address, value));
+        ApplyMmc(address, value);
     }
 
     /// <summary>検証用: バンク切り替えレジスタへの書き込み。</summary>

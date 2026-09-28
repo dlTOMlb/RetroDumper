@@ -50,9 +50,41 @@ public static class MapperRegister
         // GBA は読み出しに書き込みを必要としない。例外を作らない。
         CartridgeKind.GameBoyAdvance => false,
 
-        // SFC の SA-1 / S-DD1 は MMC の貼り替えに書き込みが要るが、
-        // 電源投入時の既定値で 4MB まで読めるため、既定では行わない。
-        // 明示的に許可したときだけ通る（＝ここでは許可しない）。
+        // SFC のマッパーチップが持つ、窓を貼り替えるレジスタ。
+        //
+        // GB の MBC とまったく同じ性質で、選ぶだけで内容は変わらない。
+        // 以前はここを通していなかった。市販の SA-1 が最大 4MB で、
+        // 電源投入時の既定値のまま読めてしまうため必要が無かったから。
+        //
+        // **天外魔境ZERO (5MB) でその前提が崩れた。**4MB を超える分を
+        // 読むには貼り替えが要るのに、通さないままだったため
+        // 「書き込みを許可」を外させることになっていた。
+        // GB を通して SFC を通さないのは筋が通らない。
+        //
+        // 開けるのは 13 番地だけ。GB の $0000-$7FFF (32KB) より
+        // はるかに狭く、セーブ RAM の窓とは完全に別の場所にある。
+        CartridgeKind.SuperFamicom => IsSnesMapperRegister(address),
+
+        _ => false,
+    };
+
+    /// <summary>
+    /// SFC のマッパーチップのレジスタか。
+    ///
+    /// | チップ | 番地 | 役割 |
+    /// |---|---|---|
+    /// | SA-1 | $00:2220-$2223 | Super MMC の 1MB ブロック 4 本 |
+    /// | S-DD1 | $00:4804-$4807 | 同上 |
+    /// | SPC7110 | $00:4830-$4834 | 1MB の窓 3 本と制御 |
+    ///
+    /// いずれもセーブ RAM の窓（$70 台 / $F0 台 / $30:6000 など）とは
+    /// 重ならない。<see cref="SaveMemory.IsSnesSram"/> と照らして確かめてある。
+    /// </summary>
+    private static bool IsSnesMapperRegister(uint address) => address switch
+    {
+        >= 0x002220 and <= 0x002223 => true,   // SA-1
+        >= 0x004804 and <= 0x004807 => true,   // S-DD1
+        >= 0x004830 and <= 0x004834 => true,   // SPC7110
         _ => false,
     };
 

@@ -195,10 +195,12 @@ public class SnesDumperTests
 
         // CXB/DXB/EXB/FXB に 0,1,2,3 を書いているはず。
         // 読み終わりに既定値へ戻すので、同じ並びが 2 回現れる。
-        var mmcWrites = cart.Writes.Where(w => w.Address is >= 0x2220 and <= 0x2223).ToList();
+        var mmcWrites = cart.BankRegisterWrites
+            .Where(w => w.Address is >= 0x2220 and <= 0x2223)
+            .ToList();
         Assert.Equal(8, mmcWrites.Count);
-        Assert.Equal([0, 1, 2, 3], mmcWrites.Take(4).Select(w => (int)w.Data[0]));
-        Assert.Equal([0, 1, 2, 3], mmcWrites.TakeLast(4).Select(w => (int)w.Data[0]));
+        Assert.Equal([0, 1, 2, 3], mmcWrites.Take(4).Select(w => (int)w.Value));
+        Assert.Equal([0, 1, 2, 3], mmcWrites.TakeLast(4).Select(w => (int)w.Value));
     }
 
     /// <summary>
@@ -230,9 +232,10 @@ public class SnesDumperTests
         Assert.Equal(rom, result.Rom);
 
         // 2 枚目のウィンドウでブロック 4,5,6,7 を選んでいるはず。
-        var blocks = cart.Writes
+        // 貼り替えはバンクレジスタ経由（書き込み保護の対象外）で送られる。
+        var blocks = cart.BankRegisterWrites
             .Where(w => w.Address is >= 0x2220 and <= 0x2223)
-            .Select(w => (int)w.Data[0])
+            .Select(w => (int)w.Value)
             .ToList();
         Assert.Contains(4, blocks);
         Assert.Contains(7, blocks);

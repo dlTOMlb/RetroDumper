@@ -89,14 +89,13 @@ public sealed class SnesDumper : ICartridgeDumper
 
         if (mapper is SnesMapper.Sa1 or SnesMapper.Sdd1 && romSize > MmcWindowSize)
             info.Warnings.Add(
-                $"{mapper} で 4MB を超えるため、MMC バンクレジスタへの書き込みが必須になります。" +
-                "書き込みが効かない場合は 4MB 以降が正しく読めません。");
+                $"{mapper} で 4MB を超えるため、MMC バンクレジスタの貼り替えが必要です。" +
+                "レジスタへの書き込みが効かない個体では 4MB 以降が正しく読めません。");
 
         if (mapper == SnesMapper.Spc7110 && romSize > Spc7110DirectSize)
             info.Warnings.Add(
-                "SPC7110 で 4MB を超えるため、窓を貼り替えるレジスタへの書き込みが必須になります。" +
-                "書き込みが効かない場合は 4MB 以降が正しく読めません。" +
-                "**この経路は実機で確認できていません。**" +
+                "SPC7110 で 4MB を超えるため、1MB の窓を貼り替えながら読みます。" +
+                "この経路は実機で確認できていません。" +
                 "吸い出したら No-Intro と一致するか必ず確かめてください。");
 
         if (clamped != romSize)
@@ -229,7 +228,7 @@ public sealed class SnesDumper : ICartridgeDumper
             // 同じ窓が続く間は書き直さない。1MB ごとに 1 回で済む。
             if (needsPaging && wanted != page)
             {
-                link.WriteByte(RfcaOpcode.SnesWrite, SnesAddressMap.Spc7110PageRegister, wanted);
+                SelectSpc7110Page(link, wanted);
                 page = wanted;
             }
 
@@ -251,7 +250,7 @@ public sealed class SnesDumper : ICartridgeDumper
 
         // 貼り替えたままだと以後の読み出しがずれる。既定へ戻す。
         if (needsPaging)
-            link.WriteByte(RfcaOpcode.SnesWrite, SnesAddressMap.Spc7110PageRegister, 0);
+            SelectSpc7110Page(link, 0);
 
         return rom;
     }
@@ -266,7 +265,7 @@ public sealed class SnesDumper : ICartridgeDumper
     private static void InitializeSpc7110(IRfcaLink link)
     {
         void Write(uint address, byte value)
-            => link.WriteByte(RfcaOpcode.SnesWrite, address, value);
+            => WriteMapperRegister(link, address, value);
 
         Write(0x004834, 0x02);
 
@@ -292,6 +291,21 @@ public sealed class SnesDumper : ICartridgeDumper
         Write(0x004832, 0x01);
         Write(0x004833, 0x02);
     }
+
+    /// <summary>$4831 に窓の番号を書く。</summary>
+    private static void SelectSpc7110Page(IRfcaLink link, byte page)
+        => WriteMapperRegister(link, SnesAddressMap.Spc7110PageRegister, page);
+
+    /// <summary>
+    /// マッパーチップのレジスタへ書く。
+    ///
+    /// **書き込み保護を有効にしたままでも通る経路を使う。**
+    /// 窓を選ぶだけで ROM もセーブも変わらない。GB の MBC と同じ扱い。
+    /// 通してよい番地かは <see cref="MapperRegister.IsBankRegister"/> が決める。
+    /// </summary>
+    private static void WriteMapperRegister(IRfcaLink link, uint address, byte value)
+        => link.WriteBankRegister(
+            CartridgeKind.SuperFamicom, RfcaOpcode.SnesWrite, address, value);
 
     // ------------------------------------------------------------------
     // SA-1 / S-DD1
@@ -356,7 +370,7 @@ public sealed class SnesDumper : ICartridgeDumper
         for (uint i = 0; i < 4; i++)
         {
             byte block = (byte)(window * 4 + i);
-            link.WriteByte(RfcaOpcode.SnesWrite, mmcBase + i, block);
+            WriteMapperRegister(link, mmcBase + i, block);
         }
     }
 

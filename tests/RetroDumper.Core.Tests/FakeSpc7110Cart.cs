@@ -57,25 +57,38 @@ public sealed class FakeSpc7110Cart(byte[] rom) : IRfcaLink
             throw new RfcaWriteBlockedException("書き込み保護が有効です");
 
         foreach (byte value in data)
-        {
-            _writes.Add((address, value));
+            Apply(address, value);
+    }
 
-            if (address == 0x004831) { _page1 = value; PageWrites++; }
-            if (address == 0x004832) _page2 = value;
-            if (address == 0x004833) _page3 = value;
+    private void Apply(uint address, byte value)
+    {
+        _writes.Add((address, value));
 
-            // 初期化の並びの最後。$4834 から始まり $4833 で終わる。
-            if (address == 0x004833 && _writes.Any(w => w.Address == 0x004834))
-                Initialized = true;
-        }
+        if (address == 0x004831) { _page1 = value; PageWrites++; }
+        if (address == 0x004832) _page2 = value;
+        if (address == 0x004833) _page3 = value;
+
+        // 初期化の並びの最後。$4834 から始まり $4833 で終わる。
+        if (address == 0x004833 && _writes.Any(w => w.Address == 0x004834))
+            Initialized = true;
     }
 
     public void WriteSaveMemory(CartridgeKind kind, uint opcode, uint address, ReadOnlySpan<byte> data)
         => throw new RfcaWriteBlockedException("このテストではセーブを扱わない");
 
+    /// <summary>
+    /// 窓の貼り替えはこちらを通る。**書き込み保護の対象外**。
+    /// 通してよい番地かは MapperRegister が決めるので、ここでも同じ判定をする。
+    /// </summary>
     public void WriteBankRegister(CartridgeKind kind, uint opcode, uint address, byte value,
                                   uint headerField = 0x08)
-        => throw new RfcaWriteBlockedException("SFC はバンクレジスタの穴を使わない");
+    {
+        if (!MapperRegister.IsBankRegister(kind, address))
+            throw new RfcaWriteBlockedException(
+                $"0x{address:X6} はバンクレジスタではありません");
+
+        Apply(address, value);
+    }
 
     public byte[] Read(uint opcode, uint address, int size, uint headerField = 0x08)
     {
