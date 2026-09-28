@@ -38,16 +38,19 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     public string PortName { get; }
 
     /// <summary>
-    /// 書き込みを許可するか。**既定は false（書き込み禁止）**。
+    /// <see cref="Write"/> / <see cref="WriteByte"/> を許可するか。
+    /// **既定は false（書き込み禁止）**。
     ///
-    /// 吸い出しだけが目的なら、この値は false のままでよい。
-    /// SFC (SA-1 含む) / メガドライブ / GBA の ROM 読み出しは
-    /// 書き込みを一切必要としない。
+    /// **今このアプリに、この経路を通る書き込みは無い。**
+    /// バンク切り替えは <see cref="WriteBankRegister"/>、
+    /// セーブは <see cref="WriteSaveMemory"/> に分かれており、
+    /// それぞれ別の判定を持つ。
     ///
-    /// true にする必要があるのは次の場合だけ:
-    ///   ・ゲームボーイ … MBC のバンク切り替え
-    ///   ・マークIII / GG … マッパーのバンク切り替え
-    ///   ・SA-1 / S-DD1 で 4MB を超える ROM … MMC の貼り替え
+    /// 画面にもこの設定は出していない。かつて「カートリッジへの書き込みを
+    /// 禁止」というチェックがあったが、何も止めていない状態になったので外した。
+    ///
+    /// ここに残してあるのは最後の砦として。うっかり <see cref="Write"/> を
+    /// 直接呼ぶコードが入れば、既定の false で例外になる。
     /// </summary>
     public bool AllowWrites { get; set; }
 

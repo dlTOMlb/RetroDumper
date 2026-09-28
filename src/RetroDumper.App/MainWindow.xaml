@@ -22,14 +22,6 @@
                 <TextBlock x:Name="CartKindText" Text="—" VerticalAlignment="Center"
                            FontWeight="Bold" MinWidth="200" />
                 <Button x:Name="DetectButton" Content="種別再取得" Click="Detect_Click" IsEnabled="False" />
-                <Separator Margin="10,0" />
-                <Border x:Name="WriteProtectBadge" Background="#DCFCE7" BorderBrush="#16A34A"
-                        BorderThickness="1" CornerRadius="3" Padding="8,3" VerticalAlignment="Center">
-                    <CheckBox x:Name="WriteProtectCheck" IsChecked="True" Margin="0"
-                              Checked="WriteProtect_Changed" Unchecked="WriteProtect_Changed"
-                              Content="カートリッジへの書き込みを禁止"
-                              ToolTip="カートリッジの内容（セーブデータ・フラッシュ）を書き換えるコマンドを送りません。ゲームボーイやマークIII のバンク切り替えは揮発性のレジスタ操作なので、有効のままでも吸い出せます。ROM の吸い出しなら常に有効のままで構いません。" />
-                </Border>
             </StackPanel>
         </Border>
 

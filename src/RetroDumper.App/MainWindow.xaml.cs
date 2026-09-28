@@ -23,7 +23,6 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _cts;
     private CartridgeInfo? _info;
     private ICartridgeDumper? _activeDumper;
-    private bool _writeWarningShown;
 
     /// <summary>GBA の ROM 先頭アドレス。採取で判明したら設定する。</summary>
     private uint? _gbaRomBase;
@@ -178,8 +177,6 @@ public partial class MainWindow : Window
                 }),
             };
 
-            ApplyWriteProtection();
-
             Log($"{port} に接続しました ({RfcaLink.BaudRate} bps)。");
             ConnectButton.Content = "切断";
             SetConnectedState(true);
@@ -222,42 +219,6 @@ public partial class MainWindow : Window
     // ==================================================================
     // 書き込み保護
     // ==================================================================
-
-    private void WriteProtect_Changed(object sender, RoutedEventArgs e)
-    {
-        if (!_uiReady) return;
-
-        bool locked = WriteProtectCheck.IsChecked == true;
-
-        WriteProtectBadge.Background = locked
-            ? new SolidColorBrush(Color.FromRgb(0xDC, 0xFC, 0xE7))
-            : new SolidColorBrush(Color.FromRgb(0xFE, 0xE2, 0xE2));
-        WriteProtectBadge.BorderBrush = locked
-            ? new SolidColorBrush(Color.FromRgb(0x16, 0xA3, 0x4A))
-            : new SolidColorBrush(Color.FromRgb(0xEF, 0x44, 0x44));
-
-        if (!locked && !_writeWarningShown)
-        {
-            _writeWarningShown = true;
-            MessageBox.Show(this,
-                "書き込み保護を解除しました。\n\n" +
-                "これ以降、バンク切り替えでカートリッジへの書き込みが発生する可能性があります。\n\n" +
-                "ゲームボーイ・マークIII/ゲームギアの吸い出しには必要ですが、\n" +
-                "GBA・SFC・メガドライブの吸い出しには不要です。",
-                "書き込み保護の解除", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-
-        ApplyWriteProtection();
-        Log(locked
-            ? "書き込み保護: 有効（カートリッジの内容を書き換えるコマンドを送りません）"
-            : "書き込み保護: 解除");
-    }
-
-    private void ApplyWriteProtection()
-    {
-        if (_link is not null)
-            _link.AllowWrites = WriteProtectCheck.IsChecked != true;
-    }
 
     // ==================================================================
     // 種別検出
