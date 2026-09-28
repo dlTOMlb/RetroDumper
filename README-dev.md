@@ -645,6 +645,61 @@ dotnet run --project tools/RfcaLab -c Release -- <コマンド> [COM3] [引数]
 
 `-- --help` 相当は引数なしで実行すると出ます。
 
+## Mac 対応の見通し（未着手）
+
+**壁は画面だけ**です。  
+WPF は Windows 専用で、これは動かしようがありません。
+
+| プロジェクト | 対象 | Mac |
+|---|---|---|
+| `RetroDumper.Core` | `net9.0` | そのまま動くはず |
+| `tools/RfcaLab` | `net9.0` | そのまま動くはず |
+| `tests` | `net9.0` | そのまま |
+| `RetroDumper.App` | `net9.0-windows` + WPF | **動かない** |
+
+Core に P/Invoke・レジストリ・WMI は使っていません。  
+ポート列挙は `SerialPort.GetPortNames()` で、macOS では `/dev/tty.usbmodem*` が返ります。  
+アダプタは USB CDC なので、macOS の標準ドライバで認識されます。
+
+### 先に確かめること
+
+**画面を作る前に、通信層が動くかを確かめること**。  
+順番を逆にすると、UI を書き終えてから通信が動かないと分かることになります。
+
+```bash
+dotnet run --project tools/RfcaLab -c Release -- survey /dev/tty.usbmodem○○○
+```
+
+ポート名は `ls /dev/tty.usbmodem*` で分かります。
+
+### 怪しいのは 1 箇所
+
+`RfcaLink.WaitWriteDrained` が `SerialPort.BytesToWrite` を見ています。
+
+```csharp
+while (...)
+    if (_port.BytesToWrite == 0) return;
+```
+
+**この property が Unix 系でどう振る舞うか確認していません。**  
+常に 0 を返すなら、この待ちは素通りします。  
+`PlatformNotSupportedException` を投げる可能性もあります。
+
+**素通りは静かに壊れるので厄介です**。  
+送り終わる前に次のコマンドを送ることになり、アダプタが詰まります。  
+参照実装も送信のたびに送信完了を待っており、この待ちはプロトコル上必要です。
+
+動かない場合は、`BytesToWrite` を見ない待ち方（送信バイト数と実測の転送速度から待つ、
+あるいは `_port.BaseStream.FlushAsync()` を使う）へ置き換えることになります。
+
+### 画面を作り直すなら
+
+**Avalonia** が素直です。  
+WPF と同じ XAML 系で、`MainWindow.xaml` の構造をかなり流用できます。  
+MAUI はデスクトップ向きではありません。
+
+CLI で済ませるなら `tools/RfcaLab` がすでにあります。
+
 ## 参考
 
 - RFCA のプロトコルは、シリアル通信の解析と、動作実績のある実装の逆コンパイルで確定させました
