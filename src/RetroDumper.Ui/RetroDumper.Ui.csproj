@@ -24,6 +24,22 @@
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!--
+      **実行ファイル 1 個で動くようにする。**
+
+      IncludeNativeLibrariesForSelfExtract だけでは足りない。
+      これはネイティブライブラリ参照にしか効かず、SkiaSharp と
+      HarfBuzzSharp の dylib / dll は NuGet から content として
+      発行先へコピーされる扱いなので、単一ファイルの外に残る。
+
+      実測: 実行ファイルだけを別の場所へ置くと、起動時に
+      libSkiaSharp が見つからず SkiaSharp.SKImageInfo の
+      型初期化で落ちた（展開先 ~/.net/RetroDumper/... にも無かった）。
+
+      IncludeAllContentForSelfExtract は content も含めて全部を
+      埋め込み、起動時に展開先へ出す。これで 1 個で動く。
+    -->
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <SatelliteResourceLanguages>ja;en</SatelliteResourceLanguages>
     <!--
