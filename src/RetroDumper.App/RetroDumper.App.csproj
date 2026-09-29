@@ -26,6 +26,13 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <SatelliteResourceLanguages>ja;en</SatelliteResourceLanguages>
+
+    <!--
+      発行先もここで決める。-o を付ければそちらが優先される。
+      ソリューションごと発行したときに、既定の bin の奥ではなく
+      dist へ出るようにしておく。Avalonia 版は dist-avalonia。
+    -->
+    <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\..\dist\</PublishDir>
   </PropertyGroup>
 
   <ItemGroup>

@@ -729,6 +729,41 @@ Windows では実機で動作を確認済み（COM3 を自動検出して接続�
 **ソリューションにも CI にも入っていません。**  
 CI は `main` 宛てしか走らないので、このブランチは手で確認しています。
 
+### Mac 向けのビルド
+
+**Windows からでも作れます**（.NET のクロス発行）。
+
+```bash
+./build-mac.sh              # arm64 と x64 の両方
+./build-mac.sh osx-arm64    # Apple Silicon だけ
+```
+
+| RID | 発行先 | 大きさ |
+|---|---|---|
+| `osx-arm64` | `dist-avalonia/osx-arm64/` | 38.9 MB |
+| `osx-x64` | `dist-avalonia/osx-x64/` | 40.8 MB |
+| `win-x64` | `dist-avalonia/win-x64/` | 45.7 MB |
+
+**発行先は RID ごとに分けてあります**。  
+どれも `RetroDumper` という名前になるので、一緒にすると黙って上書きされます。
+
+`.app` も作ります。ただし注意が 2 つ。
+
+**1. 実行ファイルだけでは動きません。**  
+単一ファイルにしても、Avalonia のネイティブライブラリ
+（`libSkiaSharp` / `libHarfBuzzSharp` / `libAvaloniaNative`）は外に出ます。  
+`.app` を組むときは、これらも `Contents/MacOS/` へ入れる必要があります。  
+一度これを忘れて、起動時に描画ライブラリが見つからない `.app` を作りました。
+
+**2. 実行権限は Windows では付けられません。**  
+Mac 側で `chmod +x` するか、`build-mac.sh` を Mac で走らせてください。
+
+署名していないので、初回は Gatekeeper に止められます。
+
+```bash
+xattr -dr com.apple.quarantine RetroDumper.app
+```
+
 ### 先に確かめること
 
 **画面を作る前に、通信層が動くかを確かめること**。  

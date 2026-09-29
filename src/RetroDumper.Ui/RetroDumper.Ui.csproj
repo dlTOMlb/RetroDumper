@@ -26,7 +26,12 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <SatelliteResourceLanguages>ja;en</SatelliteResourceLanguages>
-    <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\..\dist-avalonia\</PublishDir>
+    <!--
+      発行先を RID ごとに分ける。
+      Windows 版と Mac 版が同じ RetroDumper という名前になるため、
+      一緒にしておくと後から出した方が黙って上書きする。
+    -->
+    <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\..\dist-avalonia\$(RuntimeIdentifier)\</PublishDir>
   </PropertyGroup>
 
   <ItemGroup>
