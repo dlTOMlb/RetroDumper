@@ -685,6 +685,50 @@ Core に P/Invoke・レジストリ・WMI は使っていません。
 ポート列挙は `SerialPort.GetPortNames()` で、macOS では `/dev/tty.usbmodem*` が返ります。  
 アダプタは USB CDC なので、macOS の標準ドライバで認識されます。
 
+### 進捗: Avalonia 版がある（`ToAvalonia` ブランチ）
+
+画面を Avalonia で作り直したものが `src/RetroDumper.Ui` にあります。  
+**Core は 1 行も変えていません**。WPF 版 (`src/RetroDumper.App`) もそのまま残してあります。
+
+```bash
+dotnet build src/RetroDumper.Ui -c Release       # ソリューションには入っていない
+dotnet publish src/RetroDumper.Ui -c Release     # dist-avalonia/ へ出る
+```
+
+**発行先を分けてあります**。  
+どちらも `RetroDumper.exe` を作るので、同じ場所へ出すと黙って上書きされます。  
+指定は csproj にあるので、引数を付け忘れても混ざりません。
+
+| | WPF 版 | Avalonia 版 |
+|---|---|---|
+| 発行先 | `dist/` | `dist-avalonia/` |
+| 大きさ | 59.1 MB | 45.7 MB |
+
+Windows では実機で動作を確認済み（COM3 を自動検出して接続、状態応答まで）。  
+**Mac ではまだ試していません。**
+
+書き直した箇所:
+
+| WPF | Avalonia |
+|---|---|
+| `MessageBox` 28 箇所 | 自前の `Dialogs`（外部パッケージを足さない） |
+| ファイル選択 4 箇所 | `IStorageProvider` |
+| `GroupBox` 7 箇所 | `HeaderedContentControl` + 自前テンプレート |
+| `Dispatcher.BeginInvoke` | `Dispatcher.UIThread.Post` |
+| `Visibility` | `IsVisible`（bool） |
+| `DisplayMemberPath` | `ItemTemplate` |
+| `TextBox.AppendText` | 自前の `AppendLog` |
+| `TextBox.Text` が `string` | `string?` なので `TextOf` で受ける |
+
+**`AvaloniaXamlLoader.Load` では `x:Name` のフィールドが埋まりません。**  
+生成される `InitializeComponent()` が読み込みと紐付けの両方を行うので、そちらを呼びます。
+
+`x:DataType` に総称型を書けないので、`KeyValuePair` の代わりに `DetailRow` を作りました。  
+これでバインディングがビルド時に検証されます。
+
+**ソリューションにも CI にも入っていません。**  
+CI は `main` 宛てしか走らないので、このブランチは手で確認しています。
+
 ### 先に確かめること
 
 **画面を作る前に、通信層が動くかを確かめること**。  
