@@ -85,7 +85,6 @@ public partial class MainWindow : Window
         RefreshPorts();
         Log("RetroDumper 起動。レトロフリーク カートリッジアダプタを USB で PC に接続してください。");
         Log("アダプタ背面 2 ポートのうち、吸い出し機側（USB ハブでない方）を PC に挿します。");
-        Log("書き込み保護: 有効（カートリッジの内容を書き換えるコマンドを送りません）");
     }
 
     // ==================================================================
@@ -215,10 +214,6 @@ public partial class MainWindow : Window
         GbaHeadSampleButton.IsEnabled = connected;
         DumpButton.IsEnabled = connected && _info is not null;
     }
-
-    // ==================================================================
-    // 書き込み保護
-    // ==================================================================
 
     // ==================================================================
     // 種別検出
@@ -488,14 +483,13 @@ public partial class MainWindow : Window
         }
         catch (RfcaWriteBlockedException)
         {
-            Log("書き込み保護により吸い出しを中止しました。");
+            Log("書き込みが保護で止められ、吸い出しを中止しました。");
             ProgressText.Text = "中止（書き込み保護）";
             MessageBox.Show(this,
-                "この機種の吸い出しにはバンク切り替えのための書き込みが必要です。\n\n" +
-                "カートリッジには何も書き込まずに中止しました。\n" +
-                "続けるには上部の「カートリッジへの書き込みを禁止」を外してください。\n\n" +
-                "※ GBA・SFC・メガドライブの吸い出しに書き込みは不要です。",
-                "書き込み保護", MessageBoxButton.OK, MessageBoxImage.Information);
+                "カートリッジには何も書き込まずに中止しました。\n\n" +
+                "バンク切り替えの書き込みが、許可されていない番地へ向かっています。\n" +
+                "マッパーの判定が誤っている可能性があります。",
+                "書き込み保護", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (Exception ex)
         {
