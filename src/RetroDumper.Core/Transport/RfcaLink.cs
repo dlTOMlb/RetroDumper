@@ -117,7 +117,48 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// <summary>ポートを開いてからコマンドを送り始めるまでの待ち時間。</summary>
     public const int SettleMilliseconds = 300;
 
-    public static string[] EnumeratePorts() => SerialPort.GetPortNames();
+    /// <summary>
+    /// 画面と自動検出に出すポートの一覧。
+    ///
+    /// macOS の <c>SerialPort.GetPortNames()</c> は、アダプタとは無関係な
+    /// 擬似ポートまで返す。実測では Bluetooth-Incoming-Port、debug-console、
+    /// wlan-debug の 3 つが常に並ぶ。
+    ///
+    /// <b>これらを自動検出に含めてはいけない</b>。
+    /// 自動検出は全ポートへ状態要求を投げるので、Bluetooth のポートを開くと
+    /// 接続待ちで止まる。アダプタを探す前に、無関係なポートで待たされる。
+    /// </summary>
+    public static string[] EnumeratePorts() =>
+        SerialPort.GetPortNames().Where(IsCandidatePort).ToArray();
+
+    /// <summary>
+    /// アダプタでありうるポート名か。
+    ///
+    /// 名前で弾くだけに留める。Windows の COM1..COMn は名前から中身を
+    /// 判断できないので、そのまま通す。実機で確認済みの経路は変えない。
+    /// </summary>
+    public static bool IsCandidatePort(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+
+        foreach (string marker in NonAdapterPortMarkers)
+            if (name.Contains(marker, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+        return true;
+    }
+
+    /// <summary>
+    /// アダプタではありえないポート名の断片。
+    ///
+    /// macOS で実測した 3 つ。増やすときは、実際に列挙されたものだけを足す。
+    /// </summary>
+    private static readonly string[] NonAdapterPortMarkers =
+    [
+        "Bluetooth",     // /dev/tty.Bluetooth-Incoming-Port
+        "debug-console", // /dev/tty.debug-console
+        "wlan-debug",    // /dev/tty.wlan-debug
+    ];
 
     /// <summary>
     /// アダプタがまだ USB バスに存在するか。
