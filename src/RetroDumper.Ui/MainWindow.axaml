@@ -6,7 +6,8 @@
         x:Class="RetroDumper.Ui.MainWindow"
         Title="RetroDumper — レトロフリーク カートリッジアダプタ吸い出しツール"
         Height="780" Width="1080" MinHeight="600" MinWidth="900"
-        FontSize="13">
+        FontSize="13"
+        FontFamily="BIZ UDGothic, Yu Gothic UI, YuGothic, Hiragino Sans, Meiryo, Noto Sans CJK JP">
 
   <DockPanel Margin="10">
 
@@ -18,7 +19,7 @@
         <ComboBox x:Name="PortCombo" Width="140" VerticalAlignment="Center" />
         <Button x:Name="RefreshPortsButton" Content="更新" Click="RefreshPorts_Click" MinWidth="55" />
         <Button x:Name="AutoDetectPortButton" Content="ポート自動検出" Click="AutoDetectPort_Click"
-                MinWidth="110"
+                MinWidth="120"
                 ToolTip.Tip="全 COM ポートに状態要求を投げて、RFCA の応答を返すポートを探します。" />
         <Button x:Name="ConnectButton" Content="接続" Click="Connect_Click" MinWidth="70" />
         <Border Width="1" Background="#DDD" Margin="6,2" />
@@ -37,7 +38,18 @@
           <Button x:Name="ClearLogButton" Content="クリア" Click="ClearLog_Click" />
           <CheckBox x:Name="VerboseTraceCheck" Content="詳細トレース" />
         </StackPanel>
-        <TextBox x:Name="LogBox" IsReadOnly="True" FontFamily="Consolas" FontSize="11"
+        <!--
+             Consolas は Windows にしか無く、macOS では見つからずに落ちる。
+             加えて Consolas も Menlo も日本語を持たないので、
+             日本語だけ別フォントへ落ちて全角と半角の桁が合わなくなる。
+             実測（11px, 1 文字あたり）:
+               Menlo        半角 6.62 / 全角 11.00 = 1.66  → 揃わない
+               BIZ UDGothic 半角 5.50 / 全角 11.00 = 2.00  → 揃う
+             BIZ UDGothic は Latin も等幅（i も W も 5.50）なので、
+             16 進表示の桁と日本語の桁が同じ格子に乗る。
+        -->
+        <TextBox x:Name="LogBox" IsReadOnly="True" FontSize="11"
+                 FontFamily="BIZ UDGothic, Consolas, Menlo, DejaVu Sans Mono"
                  AcceptsReturn="True" TextWrapping="NoWrap"
                  VerticalContentAlignment="Top" />
       </DockPanel>
