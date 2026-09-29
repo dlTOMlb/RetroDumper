@@ -59,6 +59,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\RetroDumper.Core\RetroDumper.Core.csproj" />
+    <!--
+      macOS 用の通り道。
+      中身は [SupportedOSPlatform("macos")] が付いており、
+      呼び出し側も OperatingSystem.IsMacOS() で囲っているので、
+      Windows では 1 行も実行されない。
+    -->
+    <ProjectReference Include="..\RetroDumper.Mac\RetroDumper.Mac.csproj" />
   </ItemGroup>
 
 </Project>

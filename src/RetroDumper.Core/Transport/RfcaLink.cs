@@ -31,7 +31,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
         0x04, 0x00, 0x00, 0x00,
     ];
 
-    private readonly SerialPort _port;
+    private readonly IRfcaByteChannel _port;
     private readonly object _gate = new();
     private bool _disposed;
 
@@ -85,30 +85,34 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// </summary>
     public byte[] LastTrailingStatus { get; private set; } = [];
 
+    /// <summary>
+    /// 仮想 COM ポート経由で繋ぐ。Windows で実機確認済みの経路。
+    ///
+    /// バッファの大きさや DTR/RTS の設定は <see cref="SerialPortChannel"/> に移した。
+    /// 値は以前ここに書いていたものと同じである。
+    /// </summary>
     public RfcaLink(string portName)
+        : this(new SerialPortChannel(portName, BaudRate, BufferSize,
+                                     PortReadTimeout, PortWriteTimeout))
     {
-        PortName = portName;
-        // 設定は参照実装に合わせる。
-        //
-        // **バッファの大きさが効く。**既定の送信バッファは 2048 バイトしかなく、
-        // フラッシュの 4096 バイト書き込みが収まらない。ドライバが吐き出すまで
-        // Write がブロックし、1 秒のタイムアウトに掛かって失敗していた。
-        // 失敗したまま再試行したところ、アダプタが USB から落ちた（2026-09-24 実機）。
-        // 受信バッファも既定 4096 バイトで、大きな読み出しで取りこぼす余地があった。
-        _port = new SerialPort(portName, BaudRate, Parity.None, 8, StopBits.One)
-        {
-            ReadBufferSize = BufferSize,
-            WriteBufferSize = BufferSize,
-            ReadTimeout = PortReadTimeout,
-            WriteTimeout = PortWriteTimeout,
-            Handshake = Handshake.None,
-            DtrEnable = true,
-            RtsEnable = true,
-        };
-        _port.Open();
+    }
 
-        // ポートを開くと DTR/RTS が立つ。CDC デバイスによってはこれが
-        // リセット扱いになるため、落ち着くまで待ってから話しかける。
+    /// <summary>
+    /// 任意の通り道で繋ぐ。
+    ///
+    /// macOS はシリアルポートが生えないため、USB のバルク転送を使う
+    /// <c>IRfcaByteChannel</c> の実装を渡す。フレームの組み立てと
+    /// ACK の扱いはどちらでも同じなので、この先は共通である。
+    /// </summary>
+    public RfcaLink(IRfcaByteChannel channel)
+    {
+        _port = channel;
+        PortName = channel.Name;
+
+        if (!_port.IsOpen) _port.Open();
+
+        // 通信を始められる状態になると DTR/RTS が立つ。CDC デバイスによっては
+        // これがリセット扱いになるため、落ち着くまで待ってから話しかける。
         // 直後に状態要求を投げると無応答になることがある。
         Thread.Sleep(SettleMilliseconds);
         DrainInput();
@@ -174,8 +178,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
         {
             try
             {
-                return SerialPort.GetPortNames()
-                    .Any(p => string.Equals(p, PortName, StringComparison.OrdinalIgnoreCase));
+                return _port.IsStillPresent;
             }
             catch
             {
@@ -894,10 +897,8 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
         set => _port.WriteTimeout = value;
     }
 
-    /// <summary>実際に効いているポートの設定。切り分け用。</summary>
-    public string PortSettings =>
-        $"送信バッファ {_port.WriteBufferSize} / 受信バッファ {_port.ReadBufferSize} / " +
-        $"読み {_port.ReadTimeout}ms / 書き {_port.WriteTimeout}ms";
+    /// <summary>実際に効いている通り道の設定。切り分け用。</summary>
+    public string PortSettings => _port.Describe();
 
     public void ReinitializeSlot()
     {
@@ -1246,7 +1247,6 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
         // SFC の初期化変更と併せて入れたところ認識不良を起こしたため外してある。
         // 解放しなくても次回接続時のウェイクアップで問題なく読めている。
 
-        try { _port.Close(); } catch { /* 切断済み */ }
         _port.Dispose();
     }
 }

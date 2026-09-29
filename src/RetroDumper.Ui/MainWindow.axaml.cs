@@ -16,6 +16,7 @@ using RetroDumper.Core.Sms;
 using RetroDumper.Core.Snes;
 using RetroDumper.Core.Transport;
 using RetroDumper.Core.Util;
+using RetroDumper.Mac;
 
 namespace RetroDumper.Ui;
 
@@ -101,15 +102,36 @@ public partial class MainWindow : Window
     {
         string? current = PortCombo.SelectedItem as string;
         var ports = RfcaLink.EnumeratePorts().OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList();
+
+        Log($"利用可能なシリアルポート: {(ports.Count == 0 ? "なし" : string.Join(", ", ports))}");
+
+        // macOS ではアダプタのシリアルポートが生えないので、USB の口を足す。
+        // CDC functional descriptor が無く ACM ドライバが結合しないためで、
+        // 代わりに USB のバルク転送を直に使う。
+        if (MacUsbAdapter.IsPresent())
+        {
+            ports.Add(MacUsbAdapter.EntryName);
+            Log($"USB でアダプタを見つけました: {MacUsbAdapter.EntryName}");
+        }
+
         PortCombo.ItemsSource = ports;
 
         if (current is not null && ports.Contains(current))
             PortCombo.SelectedItem = current;
         else if (ports.Count > 0)
             PortCombo.SelectedIndex = ports.Count - 1;
-
-        Log($"利用可能なシリアルポート: {(ports.Count == 0 ? "なし" : string.Join(", ", ports))}");
     }
+
+    /// <summary>
+    /// 選ばれた口に合う繋ぎ方をする。
+    ///
+    /// シリアルの場合は従来どおりポート名を渡す。バッファの大きさや
+    /// 待ち時間の既定値は RfcaLink が持っているので、こちらでは触らない。
+    /// </summary>
+    private static RfcaLink CreateLink(string entry)
+        => MacUsbAdapter.Matches(entry)
+            ? new RfcaLink(MacUsbAdapter.Create())
+            : new RfcaLink(entry);
 
     private async void AutoDetectPort_Click(object? sender, RoutedEventArgs e)
     {
@@ -124,6 +146,17 @@ public partial class MainWindow : Window
 
         try
         {
+            // macOS では USB を先に見る。
+            // シリアルポートが生えないので総当たりしても見つからない。
+            if (MacUsbAdapter.IsPresent())
+            {
+                RefreshPorts();
+                PortCombo.SelectedItem = MacUsbAdapter.EntryName;
+                Log($"USB でアダプタを検出しました。接続します。");
+                Connect_Click(sender, e);
+                return;
+            }
+
             Log("全 COM ポートに状態要求を投げて RFCA を探します…");
 
             string? found = await Task.Run(() =>
@@ -169,15 +202,13 @@ public partial class MainWindow : Window
 
         try
         {
-            _link = new RfcaLink(port)
+            _link = CreateLink(port);
+            _link.Trace = message => Dispatcher.UIThread.Post(() =>
             {
-                Trace = message => Dispatcher.UIThread.Post(() =>
-                {
-                    if (VerboseTraceCheck.IsChecked == true) Log(message);
-                }),
-            };
+                if (VerboseTraceCheck.IsChecked == true) Log(message);
+            });
 
-            Log($"{port} に接続しました ({RfcaLink.BaudRate} bps)。");
+            Log($"{port} に接続しました ({_link.PortSettings})。");
             ConnectButton.Content = "切断";
             SetConnectedState(true);
             DetectCartridge();
