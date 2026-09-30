@@ -17,6 +17,8 @@ cd "$(dirname "$0")"
 targets=("${@:-osx-arm64 osx-x64}")
 read -r -a targets <<< "${targets[*]}"
 
+notarized=""
+
 for rid in "${targets[@]}"; do
     echo "=== $rid ==="
 
@@ -82,11 +84,45 @@ PLIST
     # を返し、バンドルとしては署名が壊れた状態になる。
     # 起動はできるが、配布物としては直しておく。
     #
-    # 「-」は ad-hoc 署名。配布用の証明書は持っていないので公証は受けられない。
+    # Developer ID Application の証明書がキーチェーンにあればそれを使い、
+    # 無ければ ad-hoc（「-」）にする。
+    # ad-hoc では公証を受けられないので、受け取った人が手で Gatekeeper を
+    # 通すことになる。
+    signed_with=""
     if command -v codesign > /dev/null 2>&1; then
-        codesign --force --sign - "$app" > /dev/null 2>&1
+        # 証明書が 1 枚も無いと grep が失敗する。
+        # この台本は set -e で走っているので、|| true を付けないとここで止まる。
+        identity=$(security find-identity -v -p codesigning 2>/dev/null \
+                   | grep "Developer ID Application" | head -1 \
+                   | sed -E 's/.*"(.*)"/\1/' || true)
+
+        if [ -n "$identity" ]; then
+            # **Hardened Runtime には entitlements が要る。**
+            # 付けないと JIT が実行可能メモリを確保できず、.NET は起動しない。
+            #
+            #   allow-jit / allow-unsigned-executable-memory
+            #     JIT が生成したコードを実行するために要る。
+            #   disable-library-validation
+            #     単一ファイルの実行ファイルは起動時に ~/.net/... へ中身を
+            #     展開し、そこから dylib を読む。展開されたものは本体と
+            #     同じ署名を持たないので、これが無いと読み込みが拒否される。
+            #
+            # **app.entitlements にコメントを書いてはいけない。**
+            # codesign が使う AMFIUnserializeXML はコメントを解釈せず、
+            #   Failed to parse entitlements: AMFIUnserializeXML: syntax error
+            # で落ちる。説明はここに置いてある。
+            # 失敗したら理由が見えるように、出力は捨てない。
+            codesign --force --options runtime --timestamp \
+                     --entitlements src/RetroDumper.Ui/app.entitlements \
+                     --sign "$identity" "$app"
+            signed_with="$identity"
+        else
+            codesign --force --sign - "$app" > /dev/null 2>&1
+            signed_with="ad-hoc"
+        fi
+
         if codesign -v "$app" > /dev/null 2>&1; then
-            echo "  署名し直しました (ad-hoc)"
+            echo "  署名しました ($signed_with)"
         else
             echo "  警告: 署名の検証に通りませんでした"
         fi
@@ -106,35 +142,81 @@ PLIST
         zip=""
     fi
 
+    # 公証。NOTARY_PROFILE に資格情報の名前を入れておくと実行する。
+    #
+    #   xcrun notarytool store-credentials retrodumper \
+    #     --apple-id "<Apple ID>" --team-id "<チーム ID>"
+    #   NOTARY_PROFILE=retrodumper ./build-mac.sh
+    #
+    # ad-hoc 署名では通らない。Developer ID で署名されている必要がある。
+    if [ -n "${NOTARY_PROFILE:-}" ] && [ -n "$zip" ] && [ "$signed_with" != "ad-hoc" ]; then
+        echo "  公証に出します（数分かかります）…"
+        if xcrun notarytool submit "$zip" --keychain-profile "$NOTARY_PROFILE" --wait; then
+            # チケットを .app に貼ると、受け取った人はネットに繋がなくても開ける。
+            xcrun stapler staple "$app" && echo "  チケットを添付しました"
+            notarized=yes
+            # 貼り直したので書庫を作り直す
+            rm -f "$zip"
+            ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"
+        else
+            echo "  警告: 公証に通りませんでした"
+        fi
+    elif [ -n "${NOTARY_PROFILE:-}" ] && [ "$signed_with" = "ad-hoc" ]; then
+        echo "  公証は飛ばします（ad-hoc 署名では通らない）"
+    fi
+
     printf '  %s\n' "$out/RetroDumper"
     printf '  %s\n' "$app"
     [ -n "$zip" ] && printf '  %s\n' "$zip"
 done
 
+if [ -n "$notarized" ]; then
 cat << 'NOTE'
 
---- Mac で動かすとき ---
+--- 配布について ---
 
-署名していないので、初回は Gatekeeper に止められます。
-
-  chmod +x RetroDumper.app/Contents/MacOS/RetroDumper
-  xattr -dr com.apple.quarantine RetroDumper.app
+公証済みです。受け取った人はそのまま開けます。
+Gatekeeper を手で通す操作は要りません。
 
 配る相手の Mac に合わせて選んでください。
 
   dist-avalonia/RetroDumper-osx-arm64.zip   Apple シリコン
   dist-avalonia/RetroDumper-osx-x64.zip     Intel Mac
 
-**署名していないので、受け取った人も同じ手順が要ります。**
-macOS 15 以降は右クリック「開く」で回避できません。
+NOTE
+else
+cat << 'NOTE'
+
+--- 配布について ---
+
+**公証を受けていません。**
+受け取った人は初回に Gatekeeper で止められます。
+macOS 15 以降は右クリック「開く」で回避できないので、
 システム設定 → プライバシーとセキュリティ → 「このまま開く」か、
-上の xattr を実行してもらってください。
+次を実行してもらってください。
 
-シリアルポートの名前は COM3 ではありません。
+  xattr -dr com.apple.quarantine RetroDumper.app
 
-  ls /dev/tty.usbmodem*
+公証するには、Developer ID の証明書と資格情報を用意して
+NOTARY_PROFILE を付けて走らせます。
+
+  xcrun notarytool store-credentials <名前> --apple-id <ID> --team-id <チーム>
+  NOTARY_PROFILE=<名前> ./build-mac.sh
+
+配る相手の Mac に合わせて選んでください。
+
+  dist-avalonia/RetroDumper-osx-arm64.zip   Apple シリコン
+  dist-avalonia/RetroDumper-osx-x64.zip     Intel Mac
+
+NOTE
+fi
+
+cat << 'NOTE'
+--- 実機で試すとき ---
 
 **画面より先に通信層を確かめること。**
 
-  dotnet run --project tools/RfcaLab -c Release -- survey /dev/tty.usbmodem○○○
+macOS ではアダプタのシリアルポートが生えません。
+USB のバルク転送で繋ぎます。詳しくは README-dev.md にあります。
+
 NOTE

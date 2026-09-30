@@ -1004,11 +1004,56 @@ Sealed Resources version=2 rules=13 files=1
 **配る相手の CPU に合わせてください**。  
 thin binary なので、1 つで両対応にはなりません。
 
-**公証は受けていません**。配布用の証明書を持っていないためです。  
-受け取った人は初回に Gatekeeper で止められます。  
-macOS 15 以降は右クリック「開く」で回避できないので、  
-システム設定 → プライバシーとセキュリティ → 「このまま開く」か、  
-`xattr -dr com.apple.quarantine` を案内してください。
+#### 署名と公証（実機で確認済み）
+
+Developer ID Application の証明書がキーチェーンにあれば自動で使い、  
+無ければ ad-hoc になります。ad-hoc でも起動はしますが、公証は受けられません。
+
+```bash
+xcrun notarytool store-credentials retrodumper \
+  --apple-id "<Apple ID>" --team-id "<チーム ID>"
+
+NOTARY_PROFILE=retrodumper ./build-mac.sh
+```
+
+公証まで走らせると、チケットを `.app` に貼って書庫を作り直します。  
+**チケットを貼ると、受け取った人はネットに繋がなくても開けます**。
+
+2026-09-30 に両アーキテクチャで通しました。
+
+```
+spctl -a -vvv -t exec RetroDumper.app
+  accepted
+  source = Notarized Developer ID
+  origin = Developer ID Application: ...
+```
+
+zip を展開して検疫属性を付けた状態（ダウンロードと同じ条件）でも `accepted` です。  
+**受け取った人は xattr もシステム設定での許可も要りません**。
+
+踏んだ落とし穴が 3 つあります。
+
+**1. entitlements にコメントを書いてはいけません。**  
+`codesign` が使う AMFI のパーサはコメントを解釈せず、こう落ちます。
+
+```
+Failed to parse entitlements: AMFIUnserializeXML: syntax error near line 7
+```
+
+説明は `build-mac.sh` の側に置いてあります。
+
+**2. Hardened Runtime には entitlements が要ります。**  
+`--options runtime` は公証の必須条件ですが、付けただけでは .NET は起動しません。  
+JIT が実行可能メモリを確保できず、単一ファイルの展開先から dylib も読めません。  
+`app.entitlements` の 3 つで穴を開けています。
+
+**3. `set -e` の下では `grep` の該当なしが致命傷になります。**  
+証明書が 1 枚も無いと `grep "Developer ID Application"` が終了コード 1 を返し、  
+台本がそこで止まります。アイコンも書庫も作られません。`|| true` が要ります。
+
+証明書の有効期限にも注意してください。  
+期限が切れたら署名し直しが必要です。  
+ただし**公証済みの配布物は、署名時点で有効なら期限後も開けます**。
 
 #### 半角と全角がずれる件（直してあります）
 
