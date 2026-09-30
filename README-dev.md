@@ -695,17 +695,16 @@ true に設定します。
 おかげで、上の「コマンド」に書いてある指定がそのまま Mac でも通ります。
 
 ```bash
-dotnet test                                            # 444 合格 / 3 失敗
+dotnet test                                            # 462 合格
 dotnet build RetroDumper.sln -c Release -warnaserror   # 警告 0
 ```
 
 **できあがる EXE が Mac で動くわけではありません**。WPF なので実行は Windows のみです。  
 Windows 上では、この設定は何も変えません。
 
-失敗する 3 件は `Path.GetInvalidFileNameChars()` の OS 差によるもので、  
-Mac 対応とは別の話です。macOS が返す禁止文字は `/` と NUL の 2 つだけで、  
-Windows に含まれる `:` や `?` が入りません。テストは Windows の戻り値を  
-前提に期待値を書いているため通りません。`main` でも同じです。
+以前は 3 件落ちていましたが、原因の `Path.GetInvalidFileNameChars()` の
+OS 差を解消したので、いまは全件通ります。下の「ファイル名は OS で変えない」を
+読んでください。
 
 Core に P/Invoke・レジストリ・WMI は使っていません。
 
@@ -866,10 +865,26 @@ Transport の機種分岐がバルク転送でも効いていることになり�
 - 吸い出した ROM の No-Intro との一致
 - `tools/RfcaLab` は今もシリアルポート前提で、macOS では使えません
 
-なお **ファイル名の付き方は Windows と同じではありません**。  
-`Path.GetInvalidFileNameChars()` が OS で違うためで、macOS では `:` や `?` が
-そのまま残ります（`Game: Subtitle (USA).sfc` のような名前になる）。  
-これは Transport とは無関係の、Core 側の既知の差です。
+#### ファイル名は OS で変えない
+
+`Path.GetInvalidFileNameChars()` の戻り値は OS で違います。
+
+| OS | 返ってくるもの |
+|---|---|
+| Windows | 制御文字 (0x00-0x1F) と `"` `<` `>` `|` `:` `*` `?` `\` `/` |
+| macOS / Linux | NUL と `/` の 2 つだけ |
+
+これに任せると、**同じカセットから OS ごとに違う名前が出ます**。  
+macOS では `Game: Subtitle (USA).sfc` のように `:` や `?` が残り、  
+No-Intro との突き合わせが外れるうえ、Windows へ持っていくと開けません。
+
+**吸い出したものは OS をまたいで持ち歩きます。**  
+どこで吸い出しても同じ名前になるよう、`FileNaming` は Windows の集合に
+揃えてあります。Windows の集合は macOS と Linux の集合を含むので、
+これで 3 つの OS すべてで通る名前になります。
+
+Windows 側の出力は以前と同じです。置き換える文字の集合が変わっていないためで、
+変わったのは macOS と Linux での結果だけです。
 
 #### macOS で除外すべきポート
 

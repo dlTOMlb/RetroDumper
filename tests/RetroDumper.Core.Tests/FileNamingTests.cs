@@ -115,4 +115,52 @@ public sealed class NoIntroNamingTests
     [InlineData("Crash Bandicoot Advance (Japan)", "Crash Bandicoot Advance (Japan).sav")]
     public void セーブもNo_Intro名で保存する(string game, string expected)
         => Assert.Equal(expected, FileNaming.MakeRomFileName(game, ".sav"));
+
+    /// <summary>
+    /// 使えない文字の集合は OS で変えないこと。
+    ///
+    /// Path.GetInvalidFileNameChars() の戻り値は OS で違う。
+    /// Windows は制御文字と " &lt; &gt; | : * ? \ / を返すが、
+    /// macOS と Linux は NUL と / の 2 つしか返さない。
+    /// それに任せると、同じカセットから OS ごとに違う名前が出る。
+    ///
+    /// 吸い出したものは OS をまたいで持ち歩く。どこで吸い出しても
+    /// 同じ名前になるよう、Windows の集合に揃えてある。
+    /// </summary>
+    [Theory]
+    [InlineData('"')]
+    [InlineData('<')]
+    [InlineData('>')]
+    [InlineData('|')]
+    [InlineData(':')]
+    [InlineData('*')]
+    [InlineData('?')]
+    [InlineData('\\')]
+    [InlineData('/')]
+    public void Windowsで使えない記号はどのOSでも置き換える(char bad)
+        => Assert.Equal($"A_B.sfc", FileNaming.MakeRomFileName($"A{bad}B", ".sfc"));
+
+    /// <summary>
+    /// 空白でない制御文字も置き換える。
+    ///
+    /// 空白扱いのもの（タブ・改行）は先に半角スペースへ揃うので、
+    /// ここで '_' になるのはそれ以外の制御文字だけである。
+    /// </summary>
+    [Theory]
+    [InlineData('\u0001')]
+    [InlineData('\u0007')]
+    [InlineData('\u001F')]
+    public void 空白でない制御文字は置き換える(char bad)
+        => Assert.Equal("A_B.sfc", FileNaming.MakeRomFileName($"A{bad}B", ".sfc"));
+
+    /// <summary>
+    /// No-Intro には ':' や '?' を含む名前が実在する。
+    /// macOS では以前これがそのまま残り、Windows へ持っていくと開けなかった。
+    /// </summary>
+    [Theory]
+    [InlineData("Ristar: The Shooting Star (USA)", "Ristar_ The Shooting Star (USA).md")]
+    [InlineData("Where in the World? (USA)", "Where in the World_ (USA).md")]
+    [InlineData("A<B>C|D\"E", "A_B_C_D_E.md")]
+    public void 実在する名前で確かめる(string game, string expected)
+        => Assert.Equal(expected, FileNaming.MakeRomFileName(game, ".md"));
 }
