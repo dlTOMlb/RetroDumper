@@ -669,7 +669,7 @@ dotnet run --project tools/RfcaLab -c Release -- <コマンド> [COM3] [引数]
 
 `-- --help` 相当は引数なしで実行すると出ます。
 
-## Mac 対応の見通し（未着手）
+## Mac 対応
 
 **壁は画面だけ**です。  
 WPF は Windows 専用で、これは動かしようがありません。
