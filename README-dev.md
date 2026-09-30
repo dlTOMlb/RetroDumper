@@ -1166,12 +1166,6 @@ BIZ UDGothic は macOS と Windows 10 1809 以降の両方に標準で入って�
 あわせて「ポート自動検出」ボタンが溢れていたのを直しました  
 （必要幅 115.0 に対して `MinWidth` が 110 でした）。
 
-署名していないので、初回は Gatekeeper に止められます。
-
-```bash
-xattr -dr com.apple.quarantine RetroDumper.app
-```
-
 ### 先に確かめること
 
 **画面を作る前に、通信層が動くかを確かめること**。  

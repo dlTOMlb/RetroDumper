@@ -33,16 +33,8 @@
 | Apple シリコン（M1 以降） | `RetroDumper-osx-arm64.zip` |
 | Intel Mac | `RetroDumper-osx-x64.zip` |
 
-展開して `RetroDumper.app` を開きます。  
-**初回は「開発元を確認できない」と言われます**。  
-署名に必要な証明書を持っていないためです。
-
-システム設定 → プライバシーとセキュリティ →「このまま開く」を押すか、
-ターミナルで次を実行してください。
-
-```bash
-xattr -dr com.apple.quarantine RetroDumper.app
-```
+展開して `RetroDumper.app` を開くだけです。  
+Apple の公証を受けてあるので、警告は出ません。
 
 ## 使い方
 
