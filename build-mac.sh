@@ -14,6 +14,29 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# dotnet を探す。
+#
+# **PATH に無いことがある。**
+# 公式の導入台本 (dot.net/v1/dotnet-install.sh) は ~/.dotnet へ入れるが、
+# PATH は書き換えない。その状態で ./build-mac.sh と打つと
+#   ./build-mac.sh: line NN: dotnet: command not found
+# で止まる。よく使う置き場所を順に見る。
+if ! command -v dotnet > /dev/null 2>&1; then
+    for candidate in "$HOME/.dotnet" "/usr/local/share/dotnet" "/opt/homebrew/share/dotnet"; do
+        if [ -x "$candidate/dotnet" ]; then
+            PATH="$candidate:$PATH"
+            export PATH
+            break
+        fi
+    done
+fi
+
+if ! command -v dotnet > /dev/null 2>&1; then
+    echo "dotnet が見つかりません。" >&2
+    echo "~/.dotnet か /usr/local/share/dotnet に入れるか、PATH を通してください。" >&2
+    exit 1
+fi
+
 targets=("${@:-osx-arm64 osx-x64}")
 read -r -a targets <<< "${targets[*]}"
 
