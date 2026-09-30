@@ -679,7 +679,33 @@ WPF は Windows 専用で、これは動かしようがありません。
 | `RetroDumper.Core` | `net9.0` | そのまま動くはず |
 | `tools/RfcaLab` | `net9.0` | そのまま動くはず |
 | `tests` | `net9.0` | そのまま |
-| `RetroDumper.App` | `net9.0-windows` + WPF | **動かない** |
+| `RetroDumper.App` | `net9.0-windows` + WPF | ビルドは通る / **実行は不可** |
+| `RetroDumper.Mac` | `net9.0` | macOS 専用 |
+
+`RetroDumper.App` に `EnableWindowsTargeting` を入れてあります。  
+これが無いと、ソリューションを対象にした操作が Windows 以外で丸ごと落ちます。  
+テストを走らせたいだけでも、同じソリューションに居るこのプロジェクトで止まります。
+
+```
+error NETSDK1100: このオペレーティング システムで Windows を対象とする
+プロジェクトをビルドするには、EnableWindowsTargeting プロパティを
+true に設定します。
+```
+
+おかげで、上の「コマンド」に書いてある指定がそのまま Mac でも通ります。
+
+```bash
+dotnet test                                            # 444 合格 / 3 失敗
+dotnet build RetroDumper.sln -c Release -warnaserror   # 警告 0
+```
+
+**できあがる EXE が Mac で動くわけではありません**。WPF なので実行は Windows のみです。  
+Windows 上では、この設定は何も変えません。
+
+失敗する 3 件は `Path.GetInvalidFileNameChars()` の OS 差によるもので、  
+Mac 対応とは別の話です。macOS が返す禁止文字は `/` と NUL の 2 つだけで、  
+Windows に含まれる `:` や `?` が入りません。テストは Windows の戻り値を  
+前提に期待値を書いているため通りません。`main` でも同じです。
 
 Core に P/Invoke・レジストリ・WMI は使っていません。
 
