@@ -1057,7 +1057,7 @@ spctl -a -vvv -t exec RetroDumper.app
 zip を展開して検疫属性を付けた状態（ダウンロードと同じ条件）でも `accepted` です。  
 **受け取った人は xattr もシステム設定での許可も要りません**。
 
-踏んだ落とし穴が 3 つあります。
+踏んだ落とし穴が 4 つあります。
 
 **1. entitlements にコメントを書いてはいけません。**  
 `codesign` が使う AMFI のパーサはコメントを解釈せず、こう落ちます。
@@ -1076,6 +1076,31 @@ JIT が実行可能メモリを確保できず、単一ファイルの展開先�
 **3. `set -e` の下では `grep` の該当なしが致命傷になります。**  
 証明書が 1 枚も無いと `grep "Developer ID Application"` が終了コード 1 を返し、  
 台本がそこで止まります。アイコンも書庫も作られません。`|| true` が要ります。
+
+**4. 受理された直後はチケットを貼れないことがあります。**  
+Apple 側でチケットを取り出せるようになるまで少し遅れるためで、こうなります。
+
+```
+The staple and validate action failed! Error 73.
+```
+
+cdhash は一致していて、アプリ側の問題ではありません。  
+実測では、同じ .app に対して時間をおいて試し直したら貼れました。  
+`build-mac.sh` は 30 秒おきに 5 回まで試します。
+
+**貼れなかったときに成功したことにしてはいけません**。  
+以前は失敗しても先へ進み、貼れていない .app から書庫を作ったうえで、  
+末尾に「公証済みです。そのまま開けます」と出していました。  
+公証自体は通っているのでオンラインなら開けますが、  
+**オフラインの相手では弾かれます**。今は警告を出して止めます。
+
+貼り直しは後からできます。
+
+```bash
+xcrun stapler staple dist-avalonia/<rid>/RetroDumper.app
+ditto -c -k --sequesterRsrc --keepParent \
+  dist-avalonia/<rid>/RetroDumper.app dist-avalonia/RetroDumper-<rid>.zip
+```
 
 証明書の有効期限にも注意してください。  
 期限が切れたら署名し直しが必要です。  

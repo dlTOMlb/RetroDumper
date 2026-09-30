@@ -41,6 +41,7 @@ targets=("${@:-osx-arm64 osx-x64}")
 read -r -a targets <<< "${targets[*]}"
 
 notarized=""
+staple_failed=""
 
 for rid in "${targets[@]}"; do
     echo "=== $rid ==="
@@ -176,13 +177,44 @@ PLIST
         echo "  公証に出します（数分かかります）…"
         if xcrun notarytool submit "$zip" --keychain-profile "$NOTARY_PROFILE" --wait; then
             # チケットを .app に貼ると、受け取った人はネットに繋がなくても開ける。
-            xcrun stapler staple "$app" && echo "  チケットを添付しました"
-            notarized=yes
-            # 貼り直したので書庫を作り直す
-            rm -f "$zip"
-            ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"
+            #
+            # **受理された直後は貼れないことがある。**
+            # Apple 側でチケットを取り出せるようになるまで少し遅れるためで、
+            #   The staple and validate action failed! Error 73.
+            # になる。cdhash は一致していて、アプリ側の問題ではない。
+            # 実測では、少し待ってから試し直すと貼れた。
+            stapled=""
+            for attempt in 1 2 3 4 5; do
+                if xcrun stapler staple "$app" > /dev/null 2>&1; then
+                    stapled=yes
+                    echo "  チケットを添付しました（$attempt 回目）"
+                    break
+                fi
+                if [ "$attempt" -lt 5 ]; then
+                    echo "  チケットがまだ取れません。30 秒待って試します（$attempt/5）"
+                    sleep 30
+                fi
+            done
+
+            if [ -n "$stapled" ]; then
+                notarized=yes
+                # 貼ったので書庫を作り直す
+                rm -f "$zip"
+                ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"
+            else
+                # **ここで成功したことにしてはいけない。**
+                # 以前は失敗しても先へ進み、貼れていない .app から書庫を作り、
+                # 末尾に「公証済みです。そのまま開けます」と出していた。
+                staple_failed=yes
+                echo "  警告: チケットを添付できませんでした（$rid）" >&2
+                echo "         公証は通っているのでオンラインなら開けるが、" >&2
+                echo "         オフラインの相手では弾かれる。" >&2
+                echo "         後から貼り直せる:" >&2
+                echo "           xcrun stapler staple $app" >&2
+                echo "           ditto -c -k --sequesterRsrc --keepParent $app $zip" >&2
+            fi
         else
-            echo "  警告: 公証に通りませんでした"
+            echo "  警告: 公証に通りませんでした（$rid）" >&2
         fi
     elif [ -n "${NOTARY_PROFILE:-}" ] && [ "$signed_with" = "ad-hoc" ]; then
         echo "  公証は飛ばします（ad-hoc 署名では通らない）"
@@ -193,7 +225,17 @@ PLIST
     [ -n "$zip" ] && printf '  %s\n' "$zip"
 done
 
-if [ -n "$notarized" ]; then
+if [ -n "$staple_failed" ]; then
+cat << 'NOTE'
+
+--- 配布について ---
+
+**チケットを添付できなかったものがあります。上の警告を見てください。**
+公証は通っているのでオンラインなら開けますが、
+オフラインの相手では弾かれます。貼り直してから配ってください。
+
+NOTE
+elif [ -n "$notarized" ]; then
 cat << 'NOTE'
 
 --- 配布について ---
