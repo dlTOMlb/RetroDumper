@@ -679,7 +679,32 @@ WPF は Windows 専用で、これは動かしようがありません。
 | `RetroDumper.Core` | `net9.0` | そのまま動くはず |
 | `tools/RfcaLab` | `net9.0` | そのまま動くはず |
 | `tests` | `net9.0` | そのまま |
-| `RetroDumper.App` | `net9.0-windows` + WPF | **動かない** |
+| `RetroDumper.App` | `net9.0-windows` + WPF | ビルドは通る / **実行は不可** |
+| `RetroDumper.Mac` | `net9.0` | macOS 専用 |
+
+`RetroDumper.App` に `EnableWindowsTargeting` を入れてあります。  
+これが無いと、ソリューションを対象にした操作が Windows 以外で丸ごと落ちます。  
+テストを走らせたいだけでも、同じソリューションに居るこのプロジェクトで止まります。
+
+```
+error NETSDK1100: このオペレーティング システムで Windows を対象とする
+プロジェクトをビルドするには、EnableWindowsTargeting プロパティを
+true に設定します。
+```
+
+おかげで、上の「コマンド」に書いてある指定がそのまま Mac でも通ります。
+
+```bash
+dotnet test                                            # 462 合格
+dotnet build RetroDumper.sln -c Release -warnaserror   # 警告 0
+```
+
+**できあがる EXE が Mac で動くわけではありません**。WPF なので実行は Windows のみです。  
+Windows 上では、この設定は何も変えません。
+
+以前は 3 件落ちていましたが、原因の `Path.GetInvalidFileNameChars()` の
+OS 差を解消したので、いまは全件通ります。下の「ファイル名は OS で変えない」を
+読んでください。
 
 Core に P/Invoke・レジストリ・WMI は使っていません。
 
@@ -825,13 +850,41 @@ Windows 向けのビルドでも CA1416 は出ません。
 **2026-09-30、macOS で ROM の吸い出しに成功しました**（スーパーファミコンのカセット）。  
 状態要求・カセット識別・ROM の読み出しが USB バルク転送経由で通りました。
 
+2026-10-01、**GBA でも吸い出せました**。  
+スロットの初期化は機種ごとに違う（GBA は `0x04(0)→0x05`、SFC は `0x2F`）ので、  
+Transport の機種分岐がバルク転送でも効いていることになります。
+
 まだ確かめていないこと:
 
-- セーブの読み書き（`WriteSaveMemory` 系）
-- スーパーファミコン以外の機種と、機種ごとのスロット初期化
-  （`0x04`/`0x05`/`0x2F` の違いが USB 経由でも同じに効くか）
+- **セーブの読み書き**（`WriteSaveMemory` 系）。  
+  読み出しと違い、書き込みは失敗の代償がカセット側に出ます。  
+  USB 側の `BytesToWrite` は常に 0 を返します。`WritePipeTO` が
+  転送の完了まで戻らないので待つ必要が無いためですが、  
+  シリアル版の `WaitWriteDrained` が実質的に素通りになる点は
+  頭に入れておいてください。**まだ一度も通していません**。
 - 吸い出した ROM の No-Intro との一致
 - `tools/RfcaLab` は今もシリアルポート前提で、macOS では使えません
+
+#### ファイル名は OS で変えない
+
+`Path.GetInvalidFileNameChars()` の戻り値は OS で違います。
+
+| OS | 返ってくるもの |
+|---|---|
+| Windows | 制御文字 (0x00-0x1F) と `"` `<` `>` `|` `:` `*` `?` `\` `/` |
+| macOS / Linux | NUL と `/` の 2 つだけ |
+
+これに任せると、**同じカセットから OS ごとに違う名前が出ます**。  
+macOS では `Game: Subtitle (USA).sfc` のように `:` や `?` が残り、  
+No-Intro との突き合わせが外れるうえ、Windows へ持っていくと開けません。
+
+**吸い出したものは OS をまたいで持ち歩きます。**  
+どこで吸い出しても同じ名前になるよう、`FileNaming` は Windows の集合に
+揃えてあります。Windows の集合は macOS と Linux の集合を含むので、
+これで 3 つの OS すべてで通る名前になります。
+
+Windows 側の出力は以前と同じです。置き換える文字の集合が変わっていないためで、
+変わったのは macOS と Linux での結果だけです。
 
 #### macOS で除外すべきポート
 
@@ -1004,11 +1057,81 @@ Sealed Resources version=2 rules=13 files=1
 **配る相手の CPU に合わせてください**。  
 thin binary なので、1 つで両対応にはなりません。
 
-**公証は受けていません**。配布用の証明書を持っていないためです。  
-受け取った人は初回に Gatekeeper で止められます。  
-macOS 15 以降は右クリック「開く」で回避できないので、  
-システム設定 → プライバシーとセキュリティ → 「このまま開く」か、  
-`xattr -dr com.apple.quarantine` を案内してください。
+#### 署名と公証（実機で確認済み）
+
+Developer ID Application の証明書がキーチェーンにあれば自動で使い、  
+無ければ ad-hoc になります。ad-hoc でも起動はしますが、公証は受けられません。
+
+```bash
+xcrun notarytool store-credentials retrodumper \
+  --apple-id "<Apple ID>" --team-id "<チーム ID>"
+
+NOTARY_PROFILE=retrodumper ./build-mac.sh
+```
+
+公証まで走らせると、チケットを `.app` に貼って書庫を作り直します。  
+**チケットを貼ると、受け取った人はネットに繋がなくても開けます**。
+
+2026-09-30 に両アーキテクチャで通しました。
+
+```
+spctl -a -vvv -t exec RetroDumper.app
+  accepted
+  source = Notarized Developer ID
+  origin = Developer ID Application: ...
+```
+
+zip を展開して検疫属性を付けた状態（ダウンロードと同じ条件）でも `accepted` です。  
+**受け取った人は xattr もシステム設定での許可も要りません**。
+
+踏んだ落とし穴が 4 つあります。
+
+**1. entitlements にコメントを書いてはいけません。**  
+`codesign` が使う AMFI のパーサはコメントを解釈せず、こう落ちます。
+
+```
+Failed to parse entitlements: AMFIUnserializeXML: syntax error near line 7
+```
+
+説明は `build-mac.sh` の側に置いてあります。
+
+**2. Hardened Runtime には entitlements が要ります。**  
+`--options runtime` は公証の必須条件ですが、付けただけでは .NET は起動しません。  
+JIT が実行可能メモリを確保できず、単一ファイルの展開先から dylib も読めません。  
+`app.entitlements` の 3 つで穴を開けています。
+
+**3. `set -e` の下では `grep` の該当なしが致命傷になります。**  
+証明書が 1 枚も無いと `grep "Developer ID Application"` が終了コード 1 を返し、  
+台本がそこで止まります。アイコンも書庫も作られません。`|| true` が要ります。
+
+**4. 受理された直後はチケットを貼れないことがあります。**  
+Apple 側でチケットを取り出せるようになるまで少し遅れるためで、こうなります。
+
+```
+The staple and validate action failed! Error 73.
+```
+
+cdhash は一致していて、アプリ側の問題ではありません。  
+実測では、同じ .app に対して時間をおいて試し直したら貼れました。  
+`build-mac.sh` は 30 秒おきに 5 回まで試します。
+
+**貼れなかったときに成功したことにしてはいけません**。  
+以前は失敗しても先へ進み、貼れていない .app から書庫を作ったうえで、  
+末尾に「公証済みです。そのまま開けます」と出していました。  
+公証自体は通っているのでオンラインなら開けますが、  
+**オフラインの相手では弾かれます**。今は警告を出して止めます。
+
+貼り直しは後からできます。
+
+```bash
+xcrun stapler staple dist-avalonia/<rid>/RetroDumper.app
+ditto -c -k --sequesterRsrc --keepParent \
+  dist-avalonia/<rid>/RetroDumper.app dist-avalonia/RetroDumper-<rid>.zip
+```
+
+証明書の有効期限にも注意してください。  
+期限が切れたら署名し直しが必要です。  
+ただし**公証済みの配布物は、署名時点で有効なら期限後も開けます**。
 
 #### 半角と全角がずれる件（直してあります）
 

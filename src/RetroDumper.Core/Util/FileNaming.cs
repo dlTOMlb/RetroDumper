@@ -31,6 +31,30 @@ public static class FileNaming
     }
 
     /// <summary>
+    /// ファイル名に使えない記号。制御文字は別に見る。
+    ///
+    /// <b><see cref="Path.GetInvalidFileNameChars"/> を使ってはいけない</b>。
+    /// 戻り値が OS で違うためである。
+    ///
+    ///   Windows      制御文字 (0x00-0x1F) と " &lt; &gt; | : * ? \ /
+    ///   macOS/Linux  NUL と / の 2 つだけ
+    ///
+    /// そのまま使うと、同じカセットから OS ごとに違う名前が出る。
+    /// macOS では「Game: Subtitle (USA).sfc」のように ':' や '?' が残り、
+    /// No-Intro との突き合わせが外れるうえ、Windows へ持っていくと開けない。
+    ///
+    /// **吸い出したものは OS をまたいで持ち歩く。**
+    /// どこで吸い出しても同じ名前になるよう、Windows の集合に揃える。
+    /// Windows の集合は macOS と Linux の集合を含むので、
+    /// これで 3 つの OS すべてで通る名前になる。
+    /// </summary>
+    private const string InvalidFileNameSymbols = "\"<>|:*?\\/";
+
+    /// <summary>ファイル名に使えない文字か。</summary>
+    private static bool IsInvalidForFileName(char c)
+        => c < 0x20 || InvalidFileNameSymbols.Contains(c);
+
+    /// <summary>
     /// タイトルからファイル名を作る。
     ///
     /// 手順の順番に意味がある:
@@ -38,19 +62,20 @@ public static class FileNaming
     ///   2. ファイル名に使えない文字を '_' に置き換える
     ///   3. 前後の空白と、Windows が扱えない末尾のピリオドを落とす
     ///
-    /// 1 を 2 より先にやること。<see cref="Path.GetInvalidFileNameChars"/> には
-    /// タブや改行などの制御文字が含まれるので、順序を逆にすると
-    /// それらが半角スペースではなく '_' になってしまう。
+    /// 1 を 2 より先にやること。使えない文字にはタブや改行などの制御文字が
+    /// 含まれるので、順序を逆にするとそれらが半角スペースではなく
+    /// '_' になってしまう。
     /// </summary>
     public static string MakeRomFileName(string? title, string extension, string fallback = "cartridge")
     {
-        string name = NormalizeWhitespace(title ?? "");
+        string source = NormalizeWhitespace(title ?? "");
 
-        foreach (char invalid in Path.GetInvalidFileNameChars())
-            name = name.Replace(invalid, '_');
+        var sb = new StringBuilder(source.Length);
+        foreach (char c in source)
+            sb.Append(IsInvalidForFileName(c) ? '_' : c);
 
         // Windows は末尾の空白とピリオドを扱えない。
-        name = name.Trim().TrimEnd('.').Trim();
+        string name = sb.ToString().Trim().TrimEnd('.').Trim();
 
         if (name.Length == 0) name = fallback;
 
