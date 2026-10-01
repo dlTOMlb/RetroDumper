@@ -1,4 +1,4 @@
-using RetroDumper.Core.Gb;
+﻿using RetroDumper.Core.Gb;
 using RetroDumper.Core.Gba;
 using RetroDumper.Core.Transport;
 
@@ -50,6 +50,7 @@ internal static class Program
                 "gbhead" => GbHeader(port),
                 "survey" => Survey(port),
                 "pcedump" => PceDump(port, args),
+                "gbdump" => GbDump(port, args),
                 "wflash" => WriteFlash(port, args),
                 _ => Usage(),
             };
@@ -69,6 +70,7 @@ internal static class Program
 
               survey [COM3]                 挿さっているカセットの素性を手早く調べる（読むだけ）
               pcedump [COM3] [out.pce]      Hu カードを吸い出して No-Intro と照合（読むだけ）
+              gbdump [COM3] [out.gb]        GB / GBC を吸い出して No-Intro と照合（読むだけ）
               erase [COM3] [--value FF|00] [--restore]
                                             セーブを全面同じ値で消す（**書き込む**）
               savetype [COM3]               ROM を読んでセーブ装置の種類を調べる（読むだけ）
@@ -1073,6 +1075,121 @@ internal static class Program
         }
 
         return hit is null ? 3 : 0;
+    }
+
+    /// <summary>
+    /// ゲームボーイ / ゲームボーイカラーを吸い出して No-Intro と照合する。読むだけ。
+    ///
+    /// **HuC1 で 512KB を超えるものを確かめるために作った。**
+    /// HuC1 は MBC1 相当として扱っており、$2000 に下位 5bit、$4000 に上位 2bit を書く。
+    /// だが資料では HuC1 の ROM バンクレジスタは $2000-$3FFF の 6bit で、
+    /// $4000 は RAM バンク / IR 選択。これが正しければバンク 32 以降が合わない。
+    /// ポケモンカードGB (HuC1 / 1MB) がちょうどそこに当たる。
+    ///
+    /// **セーブには触らない。**IncludeSaveRam は既定で false。
+    /// </summary>
+    private static int GbDump(string port, string[] args)
+    {
+        using var link = Open(port, CartridgeKind.GameBoy);
+
+        var dumper = new GbDumper();
+        var options = new RetroDumper.Core.Dumping.DumpOptions();
+        var info = dumper.Identify(link, options);
+
+        string path = args.Length > 2 ? args[2] : "gbrom" + info.RomExtension;
+        int banks = (int)((info.RomSize + 0x3FFF) / 0x4000);
+
+        Console.WriteLine($"タイトル: {info.Title}");
+        Console.WriteLine($"MBC: {info.Mapper}（種別 0x{info.GbCartridgeType ?? 0:X2}）");
+        Console.WriteLine($"容量: {info.RomSize / 1024} KB / {banks} バンク");
+
+        foreach (string warning in info.Warnings)
+            Console.WriteLine($"  警告: {warning}");
+
+        Console.WriteLine("吸い出しています…");
+
+        var progress = new Progress<RetroDumper.Core.Dumping.DumpProgress>(p =>
+        {
+            if (p.BytesDone % (128 * 1024) == 0)
+                Console.WriteLine($"  {p.BytesDone / 1024} KB");
+        });
+
+        var result = dumper.Dump(link, info, options, progress, CancellationToken.None);
+
+        File.WriteAllBytes(path, result.Rom);
+
+        Console.WriteLine($"{result.Rom.Length / 1024} KB を {path} に保存しました。");
+        Console.WriteLine($"CRC32: {result.Crc32:X8}");
+
+        var db = RetroDumper.Core.Database.NoIntroDatabase.Load(log: null);
+        var hit = db.Match(result.Rom, result.Rom.Length);
+
+        Console.WriteLine($"No-Intro の名前: {hit?.GameName ?? "（一致なし）"}");
+
+        if (hit is not null)
+            return 0;
+
+        int sameSize = db.CountWithSize(result.Rom.Length);
+
+        Console.WriteLine(sameSize == 0
+            ? $"  この容量 ({result.Rom.Length} バイト) のソフトは DAT に 1 本も無い。容量の判定が違う。"
+            : $"  この容量のソフトは DAT に {sameSize} 本ある。中身が違う。");
+
+        ReportBankAliases(result.Rom, banks);
+
+        return 3;
+    }
+
+    /// <summary>
+    /// バンク N の内容が バンク (N &amp; 0x1F) と同じになっていないかを数える。
+    ///
+    /// そうなっていれば、ROM バンクレジスタに下位 5bit しか届いていない。
+    /// **「全部重なっている」ときだけ原因だと言える。**
+    /// 元から同じ内容のバンクを持つカセットもあるので、1 本 2 本の重なりは根拠にならない。
+    /// </summary>
+    private static void ReportBankAliases(byte[] rom, int banks)
+    {
+        const int BankSize = 0x4000;
+
+        if (banks <= 32)
+        {
+            Console.WriteLine("  32 バンク以下なので下位 5bit で足りている。別の原因。");
+            return;
+        }
+
+        int aliased = 0;
+        int looked = 0;
+
+        for (int b = 32; b < banks; b++)
+        {
+            if ((long)b * BankSize + BankSize > rom.Length) break;
+
+            int mirror = b & 0x1F;
+
+            looked++;
+
+            // **0 の扱いは MBC による。**MBC1 は 0 をバンク 1 へ読み替えるが、
+            // HuC1 は 0 をそのまま受け取る（2026-10-01 実機）。どちらでも拾えるよう、
+            // mirror が 0 のときはバンク 0 とバンク 1 の両方と比べる。
+            bool same = Same(rom, b, mirror) || (mirror == 0 && Same(rom, b, 1));
+
+            if (same) aliased++;
+        }
+
+        Console.WriteLine($"  バンク 32 以降 {looked} 本のうち {aliased} 本が"
+            + " バンク (N & 0x1F) と同じ内容。");
+
+        Console.WriteLine(aliased == looked
+            ? "  → 下位 5bit しか効いていない。MBC3 と同じ分岐（$2000 に 7bit）へ移すこと。"
+            : "  → 全部は重なっていない。5bit の取りこぼしだけが原因ではない。");
+    }
+
+    private static bool Same(byte[] rom, int bankA, int bankB)
+    {
+        const int BankSize = 0x4000;
+
+        return rom.AsSpan(bankA * BankSize, BankSize)
+                  .SequenceEqual(rom.AsSpan(bankB * BankSize, BankSize));
     }
 
     /// <summary>
