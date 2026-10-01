@@ -43,6 +43,17 @@ read -r -a targets <<< "${targets[*]}"
 notarized=""
 staple_failed=""
 
+# 版は Directory.Build.props の 1 か所で決まっている。
+# **ここで読み直さないと Info.plist だけ古い値が残る。**
+# 「今動かしているのがどのビルドか」を取り違えないための値なので、
+# 取れなければ黙って進めずに止める。
+version=$(sed -n 's/.*<Version>\(.*\)<\/Version>.*/\1/p' Directory.Build.props | head -1)
+if [ -z "$version" ]; then
+    echo "Directory.Build.props から版を読めません。" >&2
+    exit 1
+fi
+echo "版: $version"
+
 for rid in "${targets[@]}"; do
     echo "=== $rid ==="
 
@@ -92,6 +103,8 @@ for rid in "${targets[@]}"; do
   <key>CFBundleExecutable</key>      <string>RetroDumper</string>
   <key>CFBundlePackageType</key>     <string>APPL</string>
   <key>CFBundleInfoDictionaryVersion</key> <string>6.0</string>
+  <key>CFBundleShortVersionString</key> <string>${version}</string>
+  <key>CFBundleVersion</key>         <string>${version}</string>
 ${icon_key}
   <key>NSHighResolutionCapable</key> <true/>
   <key>LSMinimumSystemVersion</key>  <string>11.0</string>

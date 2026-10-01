@@ -1044,6 +1044,23 @@ Windows 版も同じく `RetroDumper.exe` 1 個になります。
 **実行権限は Windows では付けられません**。  
 Mac 側で `chmod +x` するか、`build-mac.sh` を Mac で走らせてください。
 
+#### 版は Info.plist にも入れる
+
+`Directory.Build.props` の `Version` を読んで、`Info.plist` の
+`CFBundleShortVersionString` と `CFBundleVersion` に書きます。  
+読めなければ、黙って進めずに止めます。
+
+これが無いと、**Finder の情報ウィンドウに版が出ません**。  
+アプリの中身は正しい版を持っているので実害は小さいのですが、  
+「今動かしているのがどのビルドか」を取り違えないための値なので埋めておきます。
+
+```
+mdls -name kMDItemVersion RetroDumper.app
+  kMDItemVersion = "0.1.1"
+```
+
+`Info.plist` は署名より先に書きます。順序を逆にすると署名が壊れます。
+
 #### アイコン
 
 `src/RetroDumper.Ui/app.icns` を `Contents/Resources/` に入れ、  
