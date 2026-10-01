@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using RetroDumper.Core.Dumping;
 using RetroDumper.Core.Transport;
 using RetroDumper.Core.Util;
@@ -178,11 +178,29 @@ public sealed class GbDumper : ICartridgeDumper
                 break;
 
             // MBC3: $2000 に 7bit まとめて。
-            case >= 0x0F and <= 0x13:
+            //
+            // **ポケットカメラ (0xFC) と HuC3 (0xFE) も同じ構え。**
+            // 以前は分岐が無く MBC1 の手順（$2000 に下位 5bit、$4000 に上位 2bit）に
+            // 落ちていた。この 2 つは $4000 が RAM バンク選択で ROM バンクの上位ではないので、
+            // 効くのは $2000 の 5bit だけ、つまりバンク 31 までだった。
+            // ポケットカメラは 1MB、HuC3 のソフトも 1MB 以上あるため、
+            // 後半が前半の繰り返しになって出てきていた。
+            //
+            // **この 2 つは実機で確かめていない。**MBC3 と同じ段取りに揃えただけ。
+            // 資料ではどちらも MBC3 相当で、$2000-$3FFF の 1 本で ROM バンクを選ぶ。
+            case (>= 0x0F and <= 0x13) or 0xFC or 0xFE:
                 link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x2000, (byte)(bank & 0x7F));
                 break;
 
             // MBC1: $2000 に下位 5bit、$4000 に上位 2bit（モード 0 のとき）。
+            //
+            // HuC1 (0xFF) はここに残してある。資料では MBC1 相当で、
+            // セーブの読み書きはポケモンカードGB で実機確認済み。
+            // ただし **ROM が 512KB を超える場合は未確認**。
+            // HuC1 の ROM バンクレジスタが 6bit だとすると、
+            // $2000 に 5bit しか入れないこの手順ではバンク 32 以降が合わない。
+            // ポケモンカードGB は 1MB なので、吸い出して No-Intro と
+            // 照合すれば決着する。合わなければここに分岐を足す。
             default:
                 link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x6000, 0x00);
                 link.WriteBankRegister(CartridgeKind.GameBoy, write, 0x4000, (byte)((bank >> 5) & 0x03));
