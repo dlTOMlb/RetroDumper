@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    macOS で RFCA と話すための経路。
+
+    **Core からは切り離してある。**
+    Core には P/Invoke を置かない方針なので、IOKit を叩くものは
+    こちらに寄せる。Core も WPF 版 (src/RetroDumper.App) も
+    このプロジェクトを参照していない。
+
+    ソリューションにも入れていない。tools/RfcaLab と同じ扱いで、
+    Windows 側のビルドと CI に一切触らせないためである。
+    使うときは別に建てる:
+
+      dotnet build src/RetroDumper.Mac -c Release
+  -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <!-- IOKit の COM 風 interface を関数ポインタで呼ぶために要る -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!-- Core の IRfcaByteChannel を実装する。逆向きの参照は無い。 -->
+  <ItemGroup>
+    <ProjectReference Include="..\RetroDumper.Core\RetroDumper.Core.csproj" />
+  </ItemGroup>
+
+</Project>

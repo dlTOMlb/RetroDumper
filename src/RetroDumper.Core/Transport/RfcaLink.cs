@@ -31,7 +31,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
         0x04, 0x00, 0x00, 0x00,
     ];
 
-    private readonly SerialPort _port;
+    private readonly IRfcaByteChannel _port;
     private readonly object _gate = new();
     private bool _disposed;
 
@@ -85,30 +85,34 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// </summary>
     public byte[] LastTrailingStatus { get; private set; } = [];
 
+    /// <summary>
+    /// 仮想 COM ポート経由で繋ぐ。Windows で実機確認済みの経路。
+    ///
+    /// バッファの大きさや DTR/RTS の設定は <see cref="SerialPortChannel"/> に移した。
+    /// 値は以前ここに書いていたものと同じである。
+    /// </summary>
     public RfcaLink(string portName)
+        : this(new SerialPortChannel(portName, BaudRate, BufferSize,
+                                     PortReadTimeout, PortWriteTimeout))
     {
-        PortName = portName;
-        // 設定は参照実装に合わせる。
-        //
-        // **バッファの大きさが効く。**既定の送信バッファは 2048 バイトしかなく、
-        // フラッシュの 4096 バイト書き込みが収まらない。ドライバが吐き出すまで
-        // Write がブロックし、1 秒のタイムアウトに掛かって失敗していた。
-        // 失敗したまま再試行したところ、アダプタが USB から落ちた（2026-09-24 実機）。
-        // 受信バッファも既定 4096 バイトで、大きな読み出しで取りこぼす余地があった。
-        _port = new SerialPort(portName, BaudRate, Parity.None, 8, StopBits.One)
-        {
-            ReadBufferSize = BufferSize,
-            WriteBufferSize = BufferSize,
-            ReadTimeout = PortReadTimeout,
-            WriteTimeout = PortWriteTimeout,
-            Handshake = Handshake.None,
-            DtrEnable = true,
-            RtsEnable = true,
-        };
-        _port.Open();
+    }
 
-        // ポートを開くと DTR/RTS が立つ。CDC デバイスによってはこれが
-        // リセット扱いになるため、落ち着くまで待ってから話しかける。
+    /// <summary>
+    /// 任意の通り道で繋ぐ。
+    ///
+    /// macOS はシリアルポートが生えないため、USB のバルク転送を使う
+    /// <c>IRfcaByteChannel</c> の実装を渡す。フレームの組み立てと
+    /// ACK の扱いはどちらでも同じなので、この先は共通である。
+    /// </summary>
+    public RfcaLink(IRfcaByteChannel channel)
+    {
+        _port = channel;
+        PortName = channel.Name;
+
+        if (!_port.IsOpen) _port.Open();
+
+        // 通信を始められる状態になると DTR/RTS が立つ。CDC デバイスによっては
+        // これがリセット扱いになるため、落ち着くまで待ってから話しかける。
         // 直後に状態要求を投げると無応答になることがある。
         Thread.Sleep(SettleMilliseconds);
         DrainInput();
@@ -117,7 +121,48 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
     /// <summary>ポートを開いてからコマンドを送り始めるまでの待ち時間。</summary>
     public const int SettleMilliseconds = 300;
 
-    public static string[] EnumeratePorts() => SerialPort.GetPortNames();
+    /// <summary>
+    /// 画面と自動検出に出すポートの一覧。
+    ///
+    /// macOS の <c>SerialPort.GetPortNames()</c> は、アダプタとは無関係な
+    /// 擬似ポートまで返す。実測では Bluetooth-Incoming-Port、debug-console、
+    /// wlan-debug の 3 つが常に並ぶ。
+    ///
+    /// <b>これらを自動検出に含めてはいけない</b>。
+    /// 自動検出は全ポートへ状態要求を投げるので、Bluetooth のポートを開くと
+    /// 接続待ちで止まる。アダプタを探す前に、無関係なポートで待たされる。
+    /// </summary>
+    public static string[] EnumeratePorts() =>
+        SerialPort.GetPortNames().Where(IsCandidatePort).ToArray();
+
+    /// <summary>
+    /// アダプタでありうるポート名か。
+    ///
+    /// 名前で弾くだけに留める。Windows の COM1..COMn は名前から中身を
+    /// 判断できないので、そのまま通す。実機で確認済みの経路は変えない。
+    /// </summary>
+    public static bool IsCandidatePort(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+
+        foreach (string marker in NonAdapterPortMarkers)
+            if (name.Contains(marker, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+        return true;
+    }
+
+    /// <summary>
+    /// アダプタではありえないポート名の断片。
+    ///
+    /// macOS で実測した 3 つ。増やすときは、実際に列挙されたものだけを足す。
+    /// </summary>
+    private static readonly string[] NonAdapterPortMarkers =
+    [
+        "Bluetooth",     // /dev/tty.Bluetooth-Incoming-Port
+        "debug-console", // /dev/tty.debug-console
+        "wlan-debug",    // /dev/tty.wlan-debug
+    ];
 
     /// <summary>
     /// アダプタがまだ USB バスに存在するか。
@@ -133,8 +178,7 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
         {
             try
             {
-                return SerialPort.GetPortNames()
-                    .Any(p => string.Equals(p, PortName, StringComparison.OrdinalIgnoreCase));
+                return _port.IsStillPresent;
             }
             catch
             {
@@ -853,10 +897,8 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
         set => _port.WriteTimeout = value;
     }
 
-    /// <summary>実際に効いているポートの設定。切り分け用。</summary>
-    public string PortSettings =>
-        $"送信バッファ {_port.WriteBufferSize} / 受信バッファ {_port.ReadBufferSize} / " +
-        $"読み {_port.ReadTimeout}ms / 書き {_port.WriteTimeout}ms";
+    /// <summary>実際に効いている通り道の設定。切り分け用。</summary>
+    public string PortSettings => _port.Describe();
 
     public void ReinitializeSlot()
     {
@@ -1205,7 +1247,6 @@ public sealed class RfcaLink : IRfcaLink, IDisposable
         // SFC の初期化変更と併せて入れたところ認識不良を起こしたため外してある。
         // 解放しなくても次回接続時のウェイクアップで問題なく読めている。
 
-        try { _port.Close(); } catch { /* 切断済み */ }
         _port.Dispose();
     }
 }

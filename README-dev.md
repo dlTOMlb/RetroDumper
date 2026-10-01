@@ -669,7 +669,7 @@ dotnet run --project tools/RfcaLab -c Release -- <コマンド> [COM3] [引数]
 
 `-- --help` 相当は引数なしで実行すると出ます。
 
-## Mac 対応の見通し（未着手）
+## Mac 対応
 
 **壁は画面だけ**です。  
 WPF は Windows 専用で、これは動かしようがありません。
@@ -679,11 +679,492 @@ WPF は Windows 専用で、これは動かしようがありません。
 | `RetroDumper.Core` | `net9.0` | そのまま動くはず |
 | `tools/RfcaLab` | `net9.0` | そのまま動くはず |
 | `tests` | `net9.0` | そのまま |
-| `RetroDumper.App` | `net9.0-windows` + WPF | **動かない** |
+| `RetroDumper.App` | `net9.0-windows` + WPF | ビルドは通る / **実行は不可** |
+| `RetroDumper.Mac` | `net9.0` | macOS 専用 |
 
-Core に P/Invoke・レジストリ・WMI は使っていません。  
-ポート列挙は `SerialPort.GetPortNames()` で、macOS では `/dev/tty.usbmodem*` が返ります。  
-アダプタは USB CDC なので、macOS の標準ドライバで認識されます。
+`RetroDumper.App` に `EnableWindowsTargeting` を入れてあります。  
+これが無いと、ソリューションを対象にした操作が Windows 以外で丸ごと落ちます。  
+テストを走らせたいだけでも、同じソリューションに居るこのプロジェクトで止まります。
+
+```
+error NETSDK1100: このオペレーティング システムで Windows を対象とする
+プロジェクトをビルドするには、EnableWindowsTargeting プロパティを
+true に設定します。
+```
+
+おかげで、上の「コマンド」に書いてある指定がそのまま Mac でも通ります。
+
+```bash
+dotnet test                                            # 462 合格
+dotnet build RetroDumper.sln -c Release -warnaserror   # 警告 0
+```
+
+**できあがる EXE が Mac で動くわけではありません**。WPF なので実行は Windows のみです。  
+Windows 上では、この設定は何も変えません。
+
+以前は 3 件落ちていましたが、原因の `Path.GetInvalidFileNameChars()` の
+OS 差を解消したので、いまは全件通ります。下の「ファイル名は OS で変えない」を
+読んでください。
+
+Core に P/Invoke・レジストリ・WMI は使っていません。
+
+~~ポート列挙は `SerialPort.GetPortNames()` で、macOS では `/dev/tty.usbmodem*` が返ります。~~  
+~~アダプタは USB CDC なので、macOS の標準ドライバで認識されます。~~
+
+**この 2 行は誤りでした**。2026-09-30 に実機で確かめて分かりました。  
+詳しくは下の「macOS にはシリアルポートが生えない」を読んでください。
+
+### macOS にはシリアルポートが生えない（実機で確認済み）
+
+macOS では `SerialPort.GetPortNames()` にアダプタが出てきません。  
+`/dev/tty.usbmodem*` が作られないためです。
+
+USB としては正常に列挙されます。
+
+```
++-o RetroFreak PCB-B@00130000  <class IOUSBHostDevice, ...>
+      "idVendor"  = 61453   (0xF00D)
+      "idProduct" = 4919    (0x1337)
+      "USB Product Name"  = "RetroFreak PCB_B"
+      "USB Serial Number" = "0123456789AB"
+```
+
+しかしシリアルドライバが結合しません。
+
+```
++-o AppleUSBCDCCompositeDevice  <..., !registered, !matched, ...>
+```
+
+配下に `AppleUSBACMControl` も `IOSerialBSDClient` も生えません。  
+レジストリ全体で `AppleUSBSerial` = 0、`IOSerialBSDClient` = 3（内蔵の 3 つ分だけ）です。
+
+#### 原因は CDC functional descriptor が全部無いこと
+
+構成ディスクリプタを生で読みました（48 バイト）。
+
+```
+0000  09 02 30 00 02 01 00 c0 32 09 04 00 00 01 02 02
+0010  01 00 07 05 83 03 08 00 01 09 04 01 00 02 0a 00
+0020  00 00 07 05 81 02 40 00 00 07 05 02 02 40 00 00
+```
+
+| 位置 | 内容 |
+|---|---|
+| `0x00` | CONFIGURATION: 全長 48、インターフェース 2 本、セルフパワー、100mA |
+| `0x09` | INTERFACE 0: class `02` / subclass `02` / protocol `01` = CDC-ACM |
+| `0x12` | ENDPOINT `0x83` IN / Interrupt / 8 バイト |
+| `0x19` | INTERFACE 1: class `0a` = CDC-Data |
+| `0x22` | ENDPOINT `0x81` IN / Bulk / 64 バイト |
+| `0x29` | ENDPOINT `0x02` OUT / Bulk / 64 バイト |
+
+INTERFACE 0 の直後がいきなり ENDPOINT 記述子です。  
+本来ここに並ぶべき `bDescriptorType = 0x24` の記述子が 1 つもありません。
+
+| 必要な記述子 | subtype | この機器 |
+|---|---|---|
+| Header Functional | `0x00` | 無し |
+| Call Management Functional | `0x01` | 無し |
+| Abstract Control Management Functional | `0x02` | 無し |
+| **Union Functional** | `0x06` | 無し |
+
+効いているのは **Union Functional Descriptor** の欠落です。  
+これは制御用インターフェースとデータ用インターフェースの対応をホストに伝えるもので、  
+無いと macOS の ACM ドライバは対応を決められず結合を諦めます。  
+デバイスの `busy` が 2060ms になるのは、試して失敗するまで待たされた跡です。
+
+Windows の `usbser.sys` は対応を推測して繋ぐので、同じ機器が COM ポートとして見えます。  
+**挿し直しやポート変更では直りません**。ファームウェアの側の問題です。
+
+#### 代わりに USB のバルク転送を直に使う（実機で疎通確認済み）
+
+カーネルドライバが誰もこの機器を掴んでいないので、  
+ユーザ空間から interface 1 を開けます。kext を外す手間は要りません。
+
+`src/RetroDumper.Mac` に IOKit を叩く経路を置きました。
+
+```bash
+dotnet build src/RetroDumper.Mac -c Release   # ソリューションには入れていない
+```
+
+**Core と WPF 版 (`src/RetroDumper.App`) は参照していません**。  
+Core に P/Invoke を置かない方針を保つためと、Windows 側のビルドと CI に触らせないためです。  
+ソリューションに入れていないのも同じ理由です（`tools/RfcaLab` と同じ扱い）。
+
+探索は VID/PID (`0xF00D` / `0x1337`) で行います。  
+**USB ハブ経由でも直結でも同じように見つかります**。接続形態に依存しません。
+
+**バルク転送の前に CDC の制御要求を送る必要があります**。  
+これが無いと応答が返りません。`SerialPort` を開くとドライバが同じことをしているので、  
+シリアル版のコードには現れていなかった手順です。
+
+| 要求 | bRequest | 内容 |
+|---|---|---|
+| SET_LINE_CODING | `0x20` | 115200 8N1（`00 C2 01 00 00 00 08`） |
+| SET_CONTROL_LINE_STATE | `0x22` | wValue `0x0003` = DTR&#124;RTS |
+
+どちらも `bmRequestType = 0x21`、`wIndex = 0`（interface 0 宛て）です。  
+送ったあとは 300ms 待ちます。シリアル版の `SettleMilliseconds` と同じです。
+
+省くと `WritePipeTO` の直後の `ReadPipeTO` が `0xE0004051`  
+（`kIOUSBTransactionTimeout`）になります。  
+一度タイムアウトしたパイプはそのままでは使えないので、  
+`AbortPipe` と `ClearPipeStall` で復旧させてから次を送ります。
+
+**応答は 1 回の `ReadPipeTO` では揃いません**。  
+12 バイトの状態応答が 8 バイトと 4 バイトに分かれて届きました。  
+シリアル版の `TryReadExact` と同じく、揃うまで読み足します。
+
+疎通の実測（スーパーファミコンのカセットを挿した状態）:
+
+```
+TX: 06 00 00 00 00 00 00 00 04 00 00 00
+RX: 00 00 00 00 04 00 00 00 01 00 00 00   (8 バイト + 4 バイトの 2 断片)
+→ byte[8] = 0x01 = CartridgeKind.SuperFamicom
+```
+
+3 回連続で同じ応答が返りました。
+
+#### 画面から吸い出せます（実機で確認済み）
+
+バイト列を運ぶ道を `IRfcaByteChannel` として抽象化し、  
+`RfcaLink` はフレームの組み立てと ACK の扱いだけを受け持つ形にしました。
+
+| 実装 | 用途 |
+|---|---|
+| `SerialPortChannel` | 仮想 COM ポート経由。Windows の経路 |
+| `MacUsbRfcaChannel` | USB バルク転送経由。macOS の経路 |
+
+`RfcaLink(string portName)` は `SerialPortChannel` を作るだけにしてあり、  
+**バッファの大きさや DTR/RTS の設定値は以前と同一です**。  
+Windows から見た挙動は変えていません。
+
+USB 側の `Read` は待ち時間を過ぎたときに `TimeoutException` を投げます。  
+`SerialPort.Read` と同じ約束にしてあるので、`RfcaLink` の `TryReadExact` が  
+そのまま使えます。CDC の制御要求とパイプの復旧は通り道の内側に閉じてあります。
+
+画面のポート一覧には `MacUsbAdapter.EntryName`（`USB (RetroFreak PCB-B)`）が並びます。  
+`MacUsbAdapter` がプラットフォーム判定を閉じ込めているので、  
+呼び出し側に `OperatingSystem.IsMacOS()` は要りません。  
+Windows 向けのビルドでも CA1416 は出ません。
+
+**2026-09-30、macOS で ROM の吸い出しに成功しました**（スーパーファミコンのカセット）。  
+状態要求・カセット識別・ROM の読み出しが USB バルク転送経由で通りました。
+
+2026-10-01、**GBA でも吸い出せました**。  
+スロットの初期化は機種ごとに違う（GBA は `0x04(0)→0x05`、SFC は `0x2F`）ので、  
+Transport の機種分岐がバルク転送でも効いていることになります。
+
+まだ確かめていないこと:
+
+- **セーブの読み書き**（`WriteSaveMemory` 系）。  
+  読み出しと違い、書き込みは失敗の代償がカセット側に出ます。  
+  USB 側の `BytesToWrite` は常に 0 を返します。`WritePipeTO` が
+  転送の完了まで戻らないので待つ必要が無いためですが、  
+  シリアル版の `WaitWriteDrained` が実質的に素通りになる点は
+  頭に入れておいてください。**まだ一度も通していません**。
+- 吸い出した ROM の No-Intro との一致
+- `tools/RfcaLab` は今もシリアルポート前提で、macOS では使えません
+
+#### ファイル名は OS で変えない
+
+`Path.GetInvalidFileNameChars()` の戻り値は OS で違います。
+
+| OS | 返ってくるもの |
+|---|---|
+| Windows | 制御文字 (0x00-0x1F) と `"` `<` `>` `|` `:` `*` `?` `\` `/` |
+| macOS / Linux | NUL と `/` の 2 つだけ |
+
+これに任せると、**同じカセットから OS ごとに違う名前が出ます**。  
+macOS では `Game: Subtitle (USA).sfc` のように `:` や `?` が残り、  
+No-Intro との突き合わせが外れるうえ、Windows へ持っていくと開けません。
+
+**吸い出したものは OS をまたいで持ち歩きます。**  
+どこで吸い出しても同じ名前になるよう、`FileNaming` は Windows の集合に
+揃えてあります。Windows の集合は macOS と Linux の集合を含むので、
+これで 3 つの OS すべてで通る名前になります。
+
+Windows 側の出力は以前と同じです。置き換える文字の集合が変わっていないためで、
+変わったのは macOS と Linux での結果だけです。
+
+#### macOS で除外すべきポート
+
+`SerialPort.GetPortNames()` はアダプタと無関係な擬似ポートまで返します。  
+実測では次の 3 つが常に並びます。
+
+```
+/dev/tty.Bluetooth-Incoming-Port
+/dev/tty.debug-console
+/dev/tty.wlan-debug
+```
+
+**自動検出に含めてはいけません**。  
+全ポートへ状態要求を投げる作りなので、Bluetooth のポートを開くと接続待ちで止まります。  
+`RfcaLink.IsCandidatePort` が名前で弾きます。  
+Windows の `COM1..COMn` は名前から中身を判断できないので素通しにしてあり、  
+Windows 側の挙動は変わりません。
+
+### 進捗: Avalonia 版がある（`ToAvalonia` ブランチ）
+
+画面を Avalonia で作り直したものが `src/RetroDumper.Ui` にあります。  
+**Core は 1 行も変えていません**。WPF 版 (`src/RetroDumper.App`) もそのまま残してあります。
+
+```bash
+dotnet build src/RetroDumper.Ui -c Release       # ソリューションに入れてある
+dotnet publish src/RetroDumper.Ui -c Release     # dist-avalonia/ へ出る
+```
+
+**発行先を分けてあります**。  
+どちらも `RetroDumper.exe` を作るので、同じ場所へ出すと黙って上書きされます。  
+指定は csproj にあるので、引数を付け忘れても混ざりません。
+
+| | WPF 版 | Avalonia 版 |
+|---|---|---|
+| 発行先 | `dist/` | `dist-avalonia/` |
+| 大きさ | 59.1 MB | 45.7 MB |
+
+Windows では実機で動作を確認済み（COM3 を自動検出して接続、状態応答まで）。
+
+Mac でも 2026-09-30 に起動を確認しました。  
+`.app` が立ち上がり、ウィンドウが描画され、例外も警告も出ていません  
+（WindowServer が `visible` と `Frontmost` のアサーションを取っていることをログで確認）。  
+**ただし画面からアダプタへ繋ぐ経路は通っていません**。  
+macOS ではシリアルポートが生えないためです（下記）。
+
+書き直した箇所:
+
+| WPF | Avalonia |
+|---|---|
+| `MessageBox` 28 箇所 | 自前の `Dialogs`（外部パッケージを足さない） |
+| ファイル選択 4 箇所 | `IStorageProvider` |
+| `GroupBox` 7 箇所 | `HeaderedContentControl` + 自前テンプレート |
+| `Dispatcher.BeginInvoke` | `Dispatcher.UIThread.Post` |
+| `Visibility` | `IsVisible`（bool） |
+| `DisplayMemberPath` | `ItemTemplate` |
+| `TextBox.AppendText` | 自前の `AppendLog` |
+| `TextBox.Text` が `string` | `string?` なので `TextOf` で受ける |
+
+**`AvaloniaXamlLoader.Load` では `x:Name` のフィールドが埋まりません。**  
+生成される `InitializeComponent()` が読み込みと紐付けの両方を行うので、そちらを呼びます。
+
+`x:DataType` に総称型を書けないので、`KeyValuePair` の代わりに `DetailRow` を作りました。  
+これでバインディングがビルド時に検証されます。
+
+**ソリューションにも CI にも入っていません。**  
+CI は `main` 宛てしか走らないので、このブランチは手で確認しています。
+
+### Mac 向けのビルド
+
+**Windows からでも作れます**（.NET のクロス発行）。
+
+```bash
+./build-mac.sh              # arm64 と x64 の両方
+./build-mac.sh osx-arm64    # Apple Silicon だけ
+```
+
+| RID | 発行先 | 大きさ（実測） |
+|---|---|---|
+| `osx-arm64` | `dist-avalonia/osx-arm64/` | 46.9 MB |
+| `osx-x64` | `dist-avalonia/osx-x64/` | 49.0 MB |
+| `win-x64` | `dist-avalonia/win-x64/` | 45.7 MB |
+
+**発行先は RID ごとに分けてあります**。  
+どれも `RetroDumper` という名前になるので、一緒にすると黙って上書きされます。
+
+Apple シリコン版と Intel 版で違うのは実行ファイルの命令セットだけです。  
+同梱される dylib は NuGet が universal binary で配っているので、両者で同一物です  
+（SHA-256 まで一致）。`.app` は thin binary なので、1 つで両対応にはなりません。
+
+#### 実行ファイル 1 個で動きます
+
+以前は Avalonia のネイティブライブラリ  
+（`libSkiaSharp` / `libHarfBuzzSharp` / `libAvaloniaNative`）が単一ファイルの外に出ていて、  
+`.app` を組むときに `Contents/MacOS/` へ入れる必要がありました。
+
+**`IncludeNativeLibrariesForSelfExtract` だけでは足りません**。  
+これはネイティブライブラリ参照にしか効かず、SkiaSharp と HarfBuzzSharp の  
+dylib / dll は NuGet から content として発行先へコピーされる扱いなので外に残ります。
+
+実測: 実行ファイルだけを別の場所へ置くと、起動時にこうなりました。
+
+```
+System.TypeInitializationException: The type initializer for
+'SkiaSharp.SKImageInfo' threw an exception.
+ ---> System.DllNotFoundException: Unable to load shared library 'libSkiaSharp'
+```
+
+展開先の `~/.net/RetroDumper/<hash>/` にも入っていませんでした。
+
+csproj に `IncludeAllContentForSelfExtract` を入れると content も全部埋め込まれ、  
+**実行ファイル 1 個で起動します**（実機で確認済み）。  
+`.app` の `Contents/MacOS/` も実行ファイルだけになりました。  
+Windows 版も同じく `RetroDumper.exe` 1 個になります。
+
+**実行権限は Windows では付けられません**。  
+Mac 側で `chmod +x` するか、`build-mac.sh` を Mac で走らせてください。
+
+#### アイコン
+
+`src/RetroDumper.Ui/app.icns` を `Contents/Resources/` に入れ、  
+`Info.plist` に `CFBundleIconFile` を書いています。  
+無い場合はアイコンなしで組み立て、警告だけ出します。
+
+icns は Windows 用の `src/RetroDumper.App/app.ico` から作りました。  
+ico の中身は各サイズが生の PNG なので、変換せず取り出せます  
+（16 / 20 / 24 / 32 / 40 / 48 / 64 / 128 / 256 の 9 枚）。  
+**512 と 1024 だけは元に無いので 256 から拡大しています**。
+
+作り直すときは iconset を組んでから `iconutil` に渡します。
+
+```bash
+# 16/32/64/128/256 は ico から無劣化で取り出し、
+# icon_256x256@2x 以降は sips -z で拡大してから
+iconutil -c icns RetroDumper.iconset -o src/RetroDumper.Ui/app.icns
+```
+
+#### 配布用の書庫
+
+`build-mac.sh` が `dist-avalonia/RetroDumper-<rid>.zip` まで作ります。
+
+```
+dist-avalonia/RetroDumper-osx-arm64.zip   41 MB   Apple シリコン
+dist-avalonia/RetroDumper-osx-x64.zip     43 MB   Intel Mac
+```
+
+**`.app` はフォルダなので、そのままでは渡せません**。  
+`ditto -c -k --sequesterRsrc --keepParent` で固めています。  
+`zip -r` でも大抵は通りますが、環境によって実行ビットが落ちます。
+
+**組み立てたあとに署名し直しています**。  
+.NET が付ける ad-hoc 署名は実行ファイル単体に対するもので、  
+`Contents/Resources` を持たない前提です。  
+アイコンを入れたままだと `codesign -v` がこう返します。
+
+```
+code has no resources but signature indicates they must be present
+```
+
+起動はできますが、バンドルとしては署名が壊れた状態です。  
+`codesign --force --sign -` で組み直すと、こうなります。
+
+```
+valid on disk
+satisfies its Designated Requirement
+Sealed Resources version=2 rules=13 files=1
+```
+
+書庫を展開して起動するところまで確認済みです。
+
+**配る相手の CPU に合わせてください**。  
+thin binary なので、1 つで両対応にはなりません。
+
+#### 署名と公証（実機で確認済み）
+
+Developer ID Application の証明書がキーチェーンにあれば自動で使い、  
+無ければ ad-hoc になります。ad-hoc でも起動はしますが、公証は受けられません。
+
+```bash
+xcrun notarytool store-credentials retrodumper \
+  --apple-id "<Apple ID>" --team-id "<チーム ID>"
+
+NOTARY_PROFILE=retrodumper ./build-mac.sh
+```
+
+公証まで走らせると、チケットを `.app` に貼って書庫を作り直します。  
+**チケットを貼ると、受け取った人はネットに繋がなくても開けます**。
+
+2026-09-30 に両アーキテクチャで通しました。
+
+```
+spctl -a -vvv -t exec RetroDumper.app
+  accepted
+  source = Notarized Developer ID
+  origin = Developer ID Application: ...
+```
+
+zip を展開して検疫属性を付けた状態（ダウンロードと同じ条件）でも `accepted` です。  
+**受け取った人は xattr もシステム設定での許可も要りません**。
+
+踏んだ落とし穴が 4 つあります。
+
+**1. entitlements にコメントを書いてはいけません。**  
+`codesign` が使う AMFI のパーサはコメントを解釈せず、こう落ちます。
+
+```
+Failed to parse entitlements: AMFIUnserializeXML: syntax error near line 7
+```
+
+説明は `build-mac.sh` の側に置いてあります。
+
+**2. Hardened Runtime には entitlements が要ります。**  
+`--options runtime` は公証の必須条件ですが、付けただけでは .NET は起動しません。  
+JIT が実行可能メモリを確保できず、単一ファイルの展開先から dylib も読めません。  
+`app.entitlements` の 3 つで穴を開けています。
+
+**3. `set -e` の下では `grep` の該当なしが致命傷になります。**  
+証明書が 1 枚も無いと `grep "Developer ID Application"` が終了コード 1 を返し、  
+台本がそこで止まります。アイコンも書庫も作られません。`|| true` が要ります。
+
+**4. 受理された直後はチケットを貼れないことがあります。**  
+Apple 側でチケットを取り出せるようになるまで少し遅れるためで、こうなります。
+
+```
+The staple and validate action failed! Error 73.
+```
+
+cdhash は一致していて、アプリ側の問題ではありません。  
+実測では、同じ .app に対して時間をおいて試し直したら貼れました。  
+`build-mac.sh` は 30 秒おきに 5 回まで試します。
+
+**貼れなかったときに成功したことにしてはいけません**。  
+以前は失敗しても先へ進み、貼れていない .app から書庫を作ったうえで、  
+末尾に「公証済みです。そのまま開けます」と出していました。  
+公証自体は通っているのでオンラインなら開けますが、  
+**オフラインの相手では弾かれます**。今は警告を出して止めます。
+
+貼り直しは後からできます。
+
+```bash
+xcrun stapler staple dist-avalonia/<rid>/RetroDumper.app
+ditto -c -k --sequesterRsrc --keepParent \
+  dist-avalonia/<rid>/RetroDumper.app dist-avalonia/RetroDumper-<rid>.zip
+```
+
+証明書の有効期限にも注意してください。  
+期限が切れたら署名し直しが必要です。  
+ただし**公証済みの配布物は、署名時点で有効なら期限後も開けます**。
+
+#### 半角と全角がずれる件（直してあります）
+
+**Avalonia の macOS 既定フォントは Helvetica で、日本語グリフを持ちません**。  
+そのため日本語が字ごとに別フォントへ落ち、画面の全箇所で字送りが揃わなくなります。  
+ログ欄に指定していた `Consolas` は Windows にしか無く、これも落ちていました。
+
+11px で 1 文字あたりの幅を実測しました。
+
+| フォント | 半角 | 全角 | 比 | Latin |
+|---|---|---|---|---|
+| Helvetica（既定） | 6.12 | 11.00 | 1.80 | — |
+| Menlo | 6.62 | 11.00 | 1.66 | 等幅 |
+| Hiragino Sans | 7.23 | 11.00 | 1.52 | プロポーショナル |
+| YuGothic | 6.10 | 11.00 | 1.80 | プロポーショナル |
+| Osaka | 7.35 | 9.31 | 1.27 | — |
+| **BIZ UDGothic** | **5.50** | **11.00** | **2.00** | **等幅** |
+
+**BIZ UDGothic だけが 2.00 です**。  
+しかも Latin が正確に等幅で（`i` も `W` も `0` も 5.50 = 0.5em）、  
+全角がちょうどその 2 倍なので、16 進表示の桁と日本語が同じ格子に乗ります。
+
+```
+「状態要求」= 44.00 = 「00000000」= 44.00    BIZ UDGothic
+「状態要求」= 44.00 ≠ 「00000000」= 52.98    Menlo
+```
+
+BIZ UDGothic は macOS と Windows 10 1809 以降の両方に標準で入っています。  
+ウィンドウ全体とログ欄の両方に指定し、後ろに OS ごとの代替を並べてあります。  
+利用者の画面で、ずれが消えたことを確認しました。
+
+あわせて「ポート自動検出」ボタンが溢れていたのを直しました  
+（必要幅 115.0 に対して `MinWidth` が 110 でした）。
 
 ### 先に確かめること
 
@@ -694,7 +1175,9 @@ Core に P/Invoke・レジストリ・WMI は使っていません。
 dotnet run --project tools/RfcaLab -c Release -- survey /dev/tty.usbmodem○○○
 ```
 
-ポート名は `ls /dev/tty.usbmodem*` で分かります。
+**ただし macOS では `/dev/tty.usbmodem*` が生えません**。  
+RfcaLab はシリアルポート前提なので、macOS では現状そのまま使えません。  
+上の「macOS にはシリアルポートが生えない」を読んでください。
 
 ### 怪しいのは 1 箇所
 

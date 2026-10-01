@@ -10,6 +10,25 @@
     <RootNamespace>RetroDumper.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>app.ico</ApplicationIcon>
+
+    <!--
+      Mac と Linux からでも復元とビルドだけは通るようにする。
+
+      これが無いと、ソリューションを対象にした操作が
+      Windows 以外では丸ごと落ちる。テストを走らせたいだけでも、
+      同じソリューションに居るこのプロジェクトで止まる。
+
+        error NETSDK1100: このオペレーティング システムで Windows を
+        対象とするプロジェクトをビルドするには、EnableWindowsTargeting
+        プロパティを true に設定します。
+
+      Windows 上では何も変わらない。Windows 以外で Windows 向けの
+      ターゲットパックを取得してよい、という意味しか持たない。
+
+      **できあがる EXE が Mac で動くわけではない。**
+      WPF なので実行は Windows のみ。ここで通るのはビルドまでである。
+    -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
   <!--
@@ -26,6 +45,13 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <SatelliteResourceLanguages>ja;en</SatelliteResourceLanguages>
+
+    <!--
+      発行先もここで決める。-o を付ければそちらが優先される。
+      ソリューションごと発行したときに、既定の bin の奥ではなく
+      dist へ出るようにしておく。Avalonia 版は dist-avalonia。
+    -->
+    <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\..\dist\</PublishDir>
   </PropertyGroup>
 
   <ItemGroup>

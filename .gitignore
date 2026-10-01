@@ -37,3 +37,4 @@ sfc-diagnostics-*.txt
 gba-*.txt
 wake-param-*.txt
 publish-check/
+dist-avalonia/
