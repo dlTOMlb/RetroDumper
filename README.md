@@ -123,7 +123,10 @@ Mac で同じ場所にあたるのは、`RetroDumper.app` を右クリック →
 
 ## 問い合わせ
 
-不具合の報告や質問は [@TOM_KINNIKU](https://x.com/TOM_KINNIKU) までお願いします。
+不具合の報告や質問は、次のどちらでも受け付けます。
+
+- [GitHub Issues](https://github.com/dlTOMlb/RetroDumper/issues)
+- X の [@TOM_KINNIKU](https://x.com/TOM_KINNIKU)
 
 ## ライセンス
 
