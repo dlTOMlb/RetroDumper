@@ -121,6 +121,10 @@ Mac で同じ場所にあたるのは、`RetroDumper.app` を右クリック →
 
 通信プロトコル、機種ごとのアドレス変換、容量の判定方法などは [README-dev.md](README-dev.md) にまとめてあります。
 
+## 問い合わせ
+
+不具合の報告や質問は [@TOM_KINNIKU](https://x.com/TOM_KINNIKU) までお願いします。
+
 ## ライセンス
 
 [MIT License](LICENSE)。  
