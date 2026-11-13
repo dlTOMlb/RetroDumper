@@ -668,7 +668,8 @@ No-Intro の配布は XML、libretro-database の配布は clrmamepro 形式（�
 どちらも crc / md5 / sha1 を持つので、照合の確かさは変わりません。
 
 更新版や他機種の DAT を使う場合は、exe と同じ場所の `DataBase` フォルダに`*.dat` を置いてください。  
-埋め込みと同じ名前ならフォルダ側が優先されます。
+埋め込みと同じ名前ならフォルダ側が優先されます。  
+Mac で同じ場所にあたるのは、`RetroDumper.app` を右クリック →「パッケージの内容を表示」で開く `Contents/MacOS/` です。
 
 入手先: https://datomatic.no-intro.org/
 
